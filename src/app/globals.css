@@ -1,0 +1,101 @@
+@import "tailwindcss" source(none);
+@source "../";
+
+:root {
+  --surface-canvas: #f1e9dd;
+  --surface-panel: rgba(255, 251, 245, 0.96);
+  --surface-panel-strong: #fffdf8;
+  --surface-rail: #1d2733;
+  --surface-accent: #d8e6df;
+  --ink-950: #13212d;
+  --ink-700: #344554;
+  --ink-500: #556678;
+  --line-soft: rgba(19, 33, 45, 0.12);
+  --line-strong: rgba(19, 33, 45, 0.22);
+  --signal-green: #2e7d61;
+  --signal-amber: #b77119;
+  --signal-red: #bb4d3f;
+  --signal-blue: #325f9b;
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-background: var(--surface-canvas);
+  --color-foreground: var(--ink-950);
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100%;
+  background-color: var(--surface-canvas);
+  background:
+    radial-gradient(circle at top left, rgba(216, 230, 223, 0.72), transparent 24%),
+    linear-gradient(180deg, #f8f3eb 0%, #efe7da 100%);
+  color: var(--ink-950);
+  font-family: var(--font-display), sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: rgba(50, 95, 155, 0.18);
+}
+
+.surface-card {
+  background: var(--surface-panel);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 22px 68px rgba(19, 33, 45, 0.08);
+}
+
+.surface-card-strong {
+  background: var(--surface-panel-strong);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 28px 80px rgba(19, 33, 45, 0.1);
+}
+
+.surface-item {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--line-soft);
+  border-radius: 1.25rem;
+  box-shadow: 0 10px 28px rgba(19, 33, 45, 0.05);
+}
+
+.surface-item-compact {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--line-soft);
+  border-radius: 1rem;
+}
+
+.bg-surface-canvas {
+  background-color: var(--surface-canvas);
+}
+
+.bg-surface-rail {
+  background-color: var(--surface-rail);
+}
+
+.section-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.data-grid {
+  background-image:
+    linear-gradient(to right, rgba(22, 32, 43, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(22, 32, 43, 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
