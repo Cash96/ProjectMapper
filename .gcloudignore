@@ -1,0 +1,26 @@
+.gcloudignore
+.git
+.gitignore
+
+# Dependencies and local build output
+node_modules/
+.next/
+out/
+build/
+
+# Local artifacts and reports
+coverage/
+playwright-report/
+test-results/
+artifacts/
+tools/
+
+# Environment and local debug files
+.env*
+*.log
+*.tmp*
+*.txt
+*.html
+*.cookies
+*.json
+.DS_Store
