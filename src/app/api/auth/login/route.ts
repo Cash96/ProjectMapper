@@ -18,8 +18,8 @@ function getRequestOrigin(request: Request) {
 
 export async function POST(request: Request) {
   const formData = await request.formData();
-  const username = String(formData.get("username") ?? "");
-  const password = String(formData.get("password") ?? "");
+  const username = String(formData.get("username") ?? "").trim();
+  const password = String(formData.get("password") ?? "").trim();
   const requestOrigin = getRequestOrigin(request);
 
   if (

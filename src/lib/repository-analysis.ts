@@ -1,11 +1,20 @@
 import type { RepositoryRecord } from "@/domain/project-mapper";
-import type { AnalysisDirectorySummary, AnalysisRunRecord, RepositoryAnalysisArtifact } from "@/domain/intelligence";
+import type { AnalysisDirectorySummary, RepositoryAnalysisArtifact } from "@/domain/intelligence";
 import { createAnalysisRun } from "@/lib/analysis-store";
 import { getGitHubRepositoryFileText, getGitHubRepositoryTree, inspectGitHubRepository } from "@/lib/github";
+import { generateTargetRepositoryUnderstanding } from "@/lib/target-repository-understanding";
 
 const IMPORTANT_DIRECTORY_HINTS = [
   "src",
   "app",
+  "routes",
+  "resources",
+  "views",
+  "controllers",
+  "database",
+  "migrations",
+  "config",
+  "public",
   "pages",
   "components",
   "lib",
@@ -25,8 +34,13 @@ const WORKFLOW_HINTS = [
   "login",
   "dashboard",
   "student",
+  "teacher",
+  "admin",
   "classroom",
   "lesson",
+  "assignment",
+  "assessment",
+  "grade",
   "curriculum",
   "plan",
   "onboard",
@@ -35,6 +49,15 @@ const WORKFLOW_HINTS = [
   "project",
   "chat",
   "panel",
+];
+
+const PREFERRED_KEY_PATHS = [
+  "src/app/(app)/AppLayoutClient.tsx",
+  "src/components/chat/ChatPanel.tsx",
+  "src/components/artifacts/ArtifactRenderer.tsx",
+  "src/models/AIJob.ts",
+  "Tasks/05_CORE_PLATFORM_FEATURES.md",
+  "Tasks/15_ADMIN_AND_UX.md",
 ];
 
 type TreeEntry = {
@@ -50,11 +73,17 @@ function isConfigFile(path: string) {
   return [
     "package.json",
     "package-lock.json",
+    "composer.json",
+    "composer.lock",
+    "artisan",
     "tsconfig.json",
     "next.config",
+    "vite.config",
     "tailwind.config",
     "postcss.config",
     "eslint.config",
+    "phpunit.xml",
+    "phpunit.xml.dist",
     "README.md",
     "Dockerfile",
     ".env.example",
@@ -66,20 +95,36 @@ function isRouteFile(path: string) {
   return (
     /(^|\/)src\/app\/.+\/(page|layout|loading|error)\.(ts|tsx|js|jsx|mdx)$/i.test(path) ||
     /(^|\/)src\/app\/api\/.+\/route\.(ts|tsx|js|jsx)$/i.test(path) ||
-    /(^|\/)pages\/.+\.(ts|tsx|js|jsx)$/i.test(path)
+    /(^|\/)pages\/.+\.(ts|tsx|js|jsx)$/i.test(path) ||
+    /(^|\/)routes\/.+\.php$/i.test(path) ||
+    /(^|\/)app\/Http\/Controllers\/.+\.php$/i.test(path) ||
+    /(^|\/)resources\/(views|js\/Pages|ts\/Pages)\/.+\.(blade\.php|php|ts|tsx|js|jsx|vue)$/i.test(path) ||
+    /(^|\/)app\/routes\/.+\.py$/i.test(path)
   );
 }
 
 function isComponentFile(path: string) {
-  return /(^|\/)(components|ui)\/.+\.(ts|tsx|js|jsx)$/i.test(path);
+  return (
+    /(^|\/)(components|ui)\/.+\.(ts|tsx|js|jsx)$/i.test(path) ||
+    /(^|\/)resources\/(js|ts)\/(components|widgets)\/.+\.(ts|tsx|js|jsx|vue)$/i.test(path) ||
+    /(^|\/)resources\/views\/.+\.(blade\.php|php)$/i.test(path) ||
+    /(^|\/)app\/(Livewire|View\/Components)\/.+\.php$/i.test(path) ||
+    /(^|\/)app\/(templates|static\/js)\/.+/i.test(path)
+  );
 }
 
 function isModelFile(path: string) {
-  return /(^|\/)(models?|entities|schema|schemas|types|domain)\/.+\.(ts|tsx|js|jsx|prisma)$/i.test(path);
+  return (
+    /(^|\/)(models?|entities|schema|schemas|types|domain)\/.+\.(ts|tsx|js|jsx|prisma)$/i.test(path) ||
+    /(^|\/)app\/Models\/.+\.php$/i.test(path) ||
+    /(^|\/)database\/migrations\/.+\.php$/i.test(path) ||
+    /(^|\/)app\/(Enums|Data|Domain)\/.+\.php$/i.test(path) ||
+    /(^|\/)app\/data\/.+\.py$/i.test(path)
+  );
 }
 
 function isAiFile(path: string) {
-  return /(^|\/)(ai|prompt|prompts|llm|agent|agents|assistant|chat)\/.+/i.test(path);
+  return /(^|\/)(ai|prompt|prompts|llm|agent|agents|assistant|chat|ai_training)\/.+/i.test(path) || /ai_|chat|prompt/i.test(path);
 }
 
 function isWorkflowFile(path: string) {
@@ -117,7 +162,11 @@ function buildImportantDirectories(tree: TreeEntry[]) {
   });
 }
 
-async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<RepositoryAnalysisArtifact> {
+function collectPreferredKeyPaths(filePaths: string[]) {
+  return PREFERRED_KEY_PATHS.filter((path) => filePaths.includes(path));
+}
+
+export async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<RepositoryAnalysisArtifact> {
   const inspection = await inspectGitHubRepository(repository.url);
   const analyzedAt = new Date().toISOString();
 
@@ -132,7 +181,10 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
       visibility: inspection.visibility,
       latestCommitSha: inspection.latestCommitSha,
       analyzedAt,
+      totalFileCount: 0,
+      totalDirectoryCount: 0,
       topLevelEntries: [],
+      allFilePaths: [],
       importantDirectories: [],
       configFiles: [],
       routeFiles: [],
@@ -151,6 +203,7 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
     inspection.latestCommitSha || inspection.defaultBranch,
   );
   const filePaths = tree.filter((entry) => entry.type === "blob").map((entry) => entry.path);
+  const totalDirectoryCount = tree.filter((entry) => entry.type === "tree").length;
   const topLevelEntries = uniqueLimit(tree.map((entry) => entry.path.split("/")[0] ?? entry.path), 20);
   const configFiles = uniqueLimit(filePaths.filter(isConfigFile), 12);
   const routeFiles = uniqueLimit(filePaths.filter(isRouteFile), 18);
@@ -160,11 +213,15 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
   const workflowFiles = uniqueLimit(filePaths.filter(isWorkflowFile), 18);
   const keyFilePaths = uniqueLimit(
     [
+      ...collectPreferredKeyPaths(filePaths),
       ...configFiles.slice(0, 3),
       ...routeFiles.slice(0, 3),
+      ...componentFiles.slice(0, 2),
+      ...modelFiles.slice(0, 2),
+      ...aiFiles.slice(0, 2),
       ...workflowFiles.slice(0, 3),
     ].filter(Boolean),
-    8,
+    12,
   );
 
   const keyFileExcerpts = await Promise.all(
@@ -181,6 +238,10 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
         reason = "Configuration entry point";
       } else if (routeFiles.includes(path)) {
         reason = "Route or layout surface";
+      } else if (componentFiles.includes(path)) {
+        reason = "Component or view surface";
+      } else if (modelFiles.includes(path)) {
+        reason = "Model or entity surface";
       } else if (aiFiles.includes(path)) {
         reason = "AI or prompt-related implementation";
       }
@@ -203,7 +264,10 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
     visibility: inspection.visibility,
     latestCommitSha: inspection.latestCommitSha,
     analyzedAt,
+    totalFileCount: filePaths.length,
+    totalDirectoryCount,
     topLevelEntries,
+    allFilePaths: filePaths,
     importantDirectories: buildImportantDirectories(tree),
     configFiles,
     routeFiles,
@@ -220,10 +284,17 @@ async function buildRepositoryArtifact(repository: RepositoryRecord): Promise<Re
   };
 }
 
-function summarizeRun(run: { repoA: RepositoryAnalysisArtifact; repoB: RepositoryAnalysisArtifact }) {
+function summarizeRun(run: {
+  repoA: RepositoryAnalysisArtifact;
+  repoB: RepositoryAnalysisArtifact;
+  targetUnderstandingReady: boolean;
+}) {
   return [
     `${run.repoA.repositoryName}: ${run.repoA.routeFiles.length} route files, ${run.repoA.workflowFiles.length} workflow files, ${run.repoA.aiFiles.length} AI-related files.`,
     `${run.repoB.repositoryName}: ${run.repoB.routeFiles.length} route files, ${run.repoB.componentFiles.length} components, ${run.repoB.modelFiles.length} model/entity files.`,
+    run.targetUnderstandingReady
+      ? `${run.repoB.repositoryName}: deep repository understanding completed for migration grounding.`
+      : `${run.repoB.repositoryName}: deep repository understanding did not complete.`,
   ];
 }
 
@@ -244,7 +315,20 @@ export async function runProjectAnalysis(input: {
     buildRepositoryArtifact(repoB),
   ]);
 
-  const status = sourceArtifact.error || targetArtifact.error ? "Failed" : "Complete";
+  let targetRepositoryUnderstanding = null;
+  let targetRepositoryUnderstandingError: string | undefined;
+
+  if (!targetArtifact.error) {
+    try {
+      targetRepositoryUnderstanding = await generateTargetRepositoryUnderstanding(targetArtifact);
+    } catch (error) {
+      targetRepositoryUnderstandingError = error instanceof Error
+        ? error.message
+        : "RevEd V2 understanding generation failed.";
+    }
+  }
+
+  const status = sourceArtifact.error || targetArtifact.error || targetRepositoryUnderstandingError ? "Failed" : "Complete";
 
   return createAnalysisRun({
     projectId: input.projectId,
@@ -252,6 +336,12 @@ export async function runProjectAnalysis(input: {
     status,
     repoA: sourceArtifact,
     repoB: targetArtifact,
-    summary: summarizeRun({ repoA: sourceArtifact, repoB: targetArtifact }),
+    targetRepositoryUnderstanding,
+    targetRepositoryUnderstandingError,
+    summary: summarizeRun({
+      repoA: sourceArtifact,
+      repoB: targetArtifact,
+      targetUnderstandingReady: Boolean(targetRepositoryUnderstanding),
+    }),
   });
 }

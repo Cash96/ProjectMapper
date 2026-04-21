@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-import { getLatestAnalysisRun } from "@/lib/analysis-store";
 import { generateDoctrineDraft } from "@/lib/doctrine-generator";
 import { createDoctrineVersion } from "@/lib/doctrine-store";
 import { readProjectRecord } from "@/lib/project-store";
+import { getRepositoryStudySnapshot } from "@/lib/repo-study";
 import { getOperatorSession, getRedirectUrl } from "@/lib/request-utils";
 
 export async function POST(
@@ -24,15 +24,28 @@ export async function POST(
     return NextResponse.redirect(getRedirectUrl(request, "/dashboard"), { status: 303 });
   }
 
-  const analysisRun = await getLatestAnalysisRun(projectId);
+  const targetRepository = project.repositories.find((repository) => repository.role === "Target");
 
-  if (!analysisRun) {
+  if (!targetRepository) {
     const searchParams = new URLSearchParams({
-      error: "Run analysis before generating doctrine.",
+      error: "Repo 2 is not configured for this project.",
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/doctrine`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
+      { status: 303 },
+    );
+  }
+
+  const targetStudySnapshot = await getRepositoryStudySnapshot(projectId, targetRepository);
+
+  if (!targetStudySnapshot.latestRun || !targetStudySnapshot.latestRun.understanding || !targetStudySnapshot.usable) {
+    const searchParams = new URLSearchParams({
+      error: targetStudySnapshot.statusDetail || "Run the Repo 2 study before generating doctrine.",
+    });
+
+    return NextResponse.redirect(
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   }
@@ -43,12 +56,12 @@ export async function POST(
   try {
     const content = await generateDoctrineDraft({
       project,
-      analysisRun,
+      repoStudyRun: targetStudySnapshot.latestRun,
       operatorFeedback: feedback || undefined,
     });
     const version = await createDoctrineVersion({
       projectId,
-      analysisRunId: analysisRun.id,
+      studyRunId: targetStudySnapshot.latestRun.id,
       content,
       generatedBy: session.username,
       revisionFeedback: feedback || undefined,
@@ -59,7 +72,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/doctrine`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   } catch (error) {
@@ -68,7 +81,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/doctrine`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   }

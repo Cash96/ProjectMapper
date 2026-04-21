@@ -5,8 +5,7 @@ import type { ReactNode } from "react";
 import { AppShell } from "@/components/app-shell";
 import { verifySessionToken } from "@/lib/auth/session";
 import { appConfig } from "@/lib/config";
-import { getProject } from "@/lib/project-helpers";
-import { defaultProjectId } from "@/lib/project-store";
+import { getCurrentProject } from "@/lib/project-helpers";
 
 export default async function ProtectedLayout({
   children,
@@ -21,7 +20,7 @@ export default async function ProtectedLayout({
     redirect("/login");
   }
 
-  const project = await getProject(defaultProjectId);
+  const project = await getCurrentProject();
 
   return (
     <AppShell username={session.username} project={project}>

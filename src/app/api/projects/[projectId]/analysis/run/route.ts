@@ -34,7 +34,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/analysis`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   } catch (error) {
@@ -43,7 +43,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/analysis`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   }

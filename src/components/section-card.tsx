@@ -13,22 +13,22 @@ export function SectionCard({
   action?: { label: string; href: string };
 }) {
   return (
-    <section className="surface-card rounded-3xl p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <section className="surface-card rounded-[1.5rem] p-4 sm:p-5 lg:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <p className="section-label text-[var(--ink-500)]">{eyebrow}</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">{title}</h2>
+          <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-[var(--ink-950)] sm:text-xl">{title}</h2>
         </div>
         {action ? (
           <Link
             href={action.href}
-            className="rounded-full border border-[var(--line-strong)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--ink-950)] transition hover:-translate-y-0.5"
+            className="control-button-secondary text-xs sm:text-sm"
           >
             {action.label}
           </Link>
         ) : null}
       </div>
-      <div className="mt-5 text-sm leading-7 text-[var(--ink-700)]">{children}</div>
+      <div className="mt-4 text-sm leading-7 text-[var(--ink-700)] sm:mt-5">{children}</div>
     </section>
   );
 }

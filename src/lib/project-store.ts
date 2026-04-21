@@ -1,5 +1,4 @@
 import type { ApprovalItem, ApprovalStatus, ProjectRecord, TaskRecord } from "@/domain/project-mapper";
-import { projectRecord } from "@/lib/mock-data";
 import { getMongoClient } from "@/lib/mongodb";
 
 const DB_NAME = "project_mapper";
@@ -17,22 +16,15 @@ function isMongoConfigured() {
   return Boolean(process.env.MONGODB_URI);
 }
 
-export const defaultProjectId = projectRecord.id;
-
-function cloneProjectRecord() {
-  return structuredClone(projectRecord);
-}
-
 function sanitizeProjectDocument(project: ProjectDocument) {
-  const { _id: _unused, ...rest } = project;
+  const rest = { ...project };
+  delete rest._id;
   return structuredClone(rest);
 }
 
 function getFallbackStore() {
   if (!global.__projectMapperProjects) {
-    global.__projectMapperProjects = new Map([
-      [defaultProjectId, cloneProjectRecord()],
-    ]);
+    global.__projectMapperProjects = new Map();
   }
 
   return global.__projectMapperProjects;
@@ -43,30 +35,24 @@ async function getProjectsCollection() {
   return client.db(DB_NAME).collection<ProjectDocument>(COLLECTION_NAME);
 }
 
-async function ensureSeededProjectRecord(projectId: string) {
+export async function listProjectRecords() {
   if (isMongoConfigured()) {
-    if (projectId !== defaultProjectId) {
-      return null;
-    }
-
     const collection = await getProjectsCollection();
-    await collection.updateOne(
-      { id: defaultProjectId },
-      { $setOnInsert: cloneProjectRecord() },
-      { upsert: true },
-    );
-
-    const project = await collection.findOne({ id: projectId });
-    return project ? sanitizeProjectDocument(project) : null;
+    const projects = await collection.find({}).sort({ name: 1 }).toArray();
+    return projects.map(sanitizeProjectDocument);
   }
 
-  if (projectId !== defaultProjectId) {
-    return null;
-  }
+  return [...getFallbackStore().values()].map((project) => structuredClone(project));
+}
 
-  const store = getFallbackStore();
-  const project = store.get(projectId);
-  return project ? structuredClone(project) : null;
+export async function upsertProjectRecord(project: ProjectRecord) {
+  await writeProjectRecord(project);
+  return project;
+}
+
+export async function getCurrentProjectRecord() {
+  const [project] = await listProjectRecords();
+  return project ?? null;
 }
 
 async function writeProjectRecord(project: ProjectRecord) {
@@ -202,7 +188,14 @@ function applyStoredDecision(
 }
 
 export async function readProjectRecord(projectId: string) {
-  return ensureSeededProjectRecord(projectId);
+  if (isMongoConfigured()) {
+    const collection = await getProjectsCollection();
+    const project = await collection.findOne({ id: projectId });
+    return project ? sanitizeProjectDocument(project) : null;
+  }
+
+  const project = getFallbackStore().get(projectId);
+  return project ? structuredClone(project) : null;
 }
 
 export async function saveApprovalDecision(input: {

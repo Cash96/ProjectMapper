@@ -96,14 +96,6 @@ export function parseGitHubRepositoryUrl(url: string) {
 }
 
 function formatGitHubError(status: number, payload: unknown, tokenConfigured: boolean) {
-  const apiMessage =
-    payload &&
-    typeof payload === "object" &&
-    "message" in payload &&
-    typeof payload.message === "string"
-      ? payload.message
-      : null;
-
   if (status === 401 || status === 403) {
     return "GitHub rejected the configured token. Update GITHUB_TOKEN with a valid token that can read both repositories.";
   }

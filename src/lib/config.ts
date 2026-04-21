@@ -30,9 +30,9 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse({
   APP_BASE_URL: process.env.APP_BASE_URL,
-  APP_GATE_USERNAME: process.env.APP_GATE_USERNAME,
-  APP_GATE_PASSWORD: process.env.APP_GATE_PASSWORD,
-  APP_GATE_SECRET: process.env.APP_GATE_SECRET,
+  APP_GATE_USERNAME: normalizeOptionalEnv(process.env.APP_GATE_USERNAME),
+  APP_GATE_PASSWORD: normalizeOptionalEnv(process.env.APP_GATE_PASSWORD),
+  APP_GATE_SECRET: normalizeOptionalEnv(process.env.APP_GATE_SECRET),
   MONGODB_URI: normalizeOptionalEnv(process.env.MONGODB_URI),
   GEMINI_API_KEY: normalizeOptionalEnv(process.env.GEMINI_API_KEY),
   GITHUB_TOKEN: normalizeOptionalEnv(process.env.GITHUB_TOKEN),

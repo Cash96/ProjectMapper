@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 import { recordDoctrineDecision } from "@/lib/doctrine-store";
-import { defaultProjectId, saveApprovalDecision } from "@/lib/project-store";
+import { readProjectRecord, saveApprovalDecision } from "@/lib/project-store";
 import { getOperatorSession, getRedirectUrl } from "@/lib/request-utils";
 
 export async function POST(
@@ -21,8 +21,10 @@ export async function POST(
   const decision = String(formData.get("decision") ?? "");
   const note = String(formData.get("note") ?? "");
 
-  if (projectId !== defaultProjectId) {
-    return NextResponse.redirect(getRedirectUrl(request, "/dashboard"), { status: 303 });
+  const project = await readProjectRecord(projectId);
+
+  if (!project) {
+    return NextResponse.redirect(getRedirectUrl(request, "/projects"), { status: 303 });
   }
 
   if (decision !== "approved" && decision !== "revision-requested") {
@@ -30,7 +32,7 @@ export async function POST(
       error: "invalid-decision",
     });
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/approvals`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   }
@@ -60,7 +62,7 @@ export async function POST(
   });
 
   return NextResponse.redirect(
-    getRedirectUrl(request, `/projects/${projectId}/approvals`, searchParams),
+    getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
     { status: 303 },
   );
 }

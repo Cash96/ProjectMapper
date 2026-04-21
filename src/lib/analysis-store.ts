@@ -13,7 +13,8 @@ function isMongoConfigured() {
 }
 
 function sanitizeAnalysisRun(run: AnalysisRunRecord & { _id?: unknown }) {
-  const { _id: _unused, ...rest } = run;
+  const rest = { ...run };
+  delete rest._id;
   return structuredClone(rest);
 }
 
@@ -78,4 +79,14 @@ export async function createAnalysisRun(
   runs.unshift(structuredClone(run));
   store.set(input.projectId, runs);
   return run;
+}
+
+export async function deleteAnalysisRuns(projectId: string) {
+  if (isMongoConfigured()) {
+    const collection = await getAnalysisRunsCollection();
+    await collection.deleteMany({ projectId });
+    return;
+  }
+
+  getFallbackStore().delete(projectId);
 }

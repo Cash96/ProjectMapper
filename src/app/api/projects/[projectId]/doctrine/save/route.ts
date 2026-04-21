@@ -31,7 +31,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/doctrine`, searchParams),
+      getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
       { status: 303 },
     );
   }
@@ -42,11 +42,12 @@ export async function POST(
     editedBy: session.username,
     content: {
       summary: String(formData.get("summary") ?? "").trim(),
-      architecturePatterns: parseList(formData.get("architecturePatterns")),
-      uxPatterns: parseList(formData.get("uxPatterns")),
-      interactionPatterns: parseList(formData.get("interactionPatterns")),
-      criticalRules: parseList(formData.get("criticalRules")),
+      productDoctrine: parseList(formData.get("productDoctrine")),
+      interactionModel: parseList(formData.get("interactionModel")),
+      migrationRules: parseList(formData.get("migrationRules")),
+      featureDesignRules: parseList(formData.get("featureDesignRules")),
       antiPatterns: parseList(formData.get("antiPatterns")),
+      technicalConstraints: parseList(formData.get("technicalConstraints")),
       groundingReferences: parseList(formData.get("groundingReferences")),
     },
   });
@@ -58,7 +59,7 @@ export async function POST(
   );
 
   return NextResponse.redirect(
-    getRedirectUrl(request, `/projects/${projectId}/doctrine`, searchParams),
+    getRedirectUrl(request, `/projects/${projectId}/understanding`, searchParams),
     { status: 303 },
   );
 }

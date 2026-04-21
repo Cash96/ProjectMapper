@@ -14,7 +14,8 @@ function isMongoConfigured() {
 }
 
 function sanitizeDoctrineVersion(version: DoctrineVersionRecord & { _id?: unknown }) {
-  const { _id: _unused, ...rest } = version;
+  const rest = { ...version };
+  delete rest._id;
   return structuredClone(rest);
 }
 
@@ -55,6 +56,29 @@ function formatDoctrineVersionLabel(version: number, status: DoctrineVersionStat
   return `v${version} draft`;
 }
 
+function getDoctrineContentList(
+  content: DoctrineVersionRecord["content"],
+  key: keyof DoctrineVersionRecord["content"],
+  fallbackKeys: string[] = [],
+) {
+  const record = content as unknown as Record<string, unknown>;
+  const direct = record[key];
+
+  if (Array.isArray(direct)) {
+    return direct.filter((entry): entry is string => typeof entry === "string");
+  }
+
+  for (const fallbackKey of fallbackKeys) {
+    const fallback = record[fallbackKey];
+
+    if (Array.isArray(fallback)) {
+      return fallback.filter((entry): entry is string => typeof entry === "string");
+    }
+  }
+
+  return [];
+}
+
 async function syncProjectDoctrineSnapshot(projectId: string, doctrineVersion: DoctrineVersionRecord) {
   await updateProjectRecord(projectId, (project) => {
     project.doctrine.version = formatDoctrineVersionLabel(doctrineVersion.version, doctrineVersion.status);
@@ -64,7 +88,7 @@ async function syncProjectDoctrineSnapshot(projectId: string, doctrineVersion: D
       timeStyle: "short",
     });
     project.doctrine.summary = doctrineVersion.content.summary;
-    project.doctrine.criticalRules = doctrineVersion.content.criticalRules;
+    project.doctrine.criticalRules = getDoctrineContentList(doctrineVersion.content, "technicalConstraints", ["featureDesignRules", "criticalRules"]);
     project.doctrine.antiPatterns = doctrineVersion.content.antiPatterns;
 
     const approval = project.approvals.find((entry) => entry.target.entity === "doctrine");
@@ -76,7 +100,7 @@ async function syncProjectDoctrineSnapshot(projectId: string, doctrineVersion: D
     approval.title = `Approve RevEd V2 doctrine ${formatDoctrineVersionLabel(doctrineVersion.version, doctrineVersion.status)}`;
     approval.summary = doctrineVersion.status === "Revision Requested" && doctrineVersion.revisionFeedback
       ? `Doctrine revision requested: ${doctrineVersion.revisionFeedback}`
-      : `Review the latest grounded doctrine draft generated from Repo B analysis before task planning proceeds.`;
+      : `Review the latest grounded doctrine draft generated from the latest usable Repo 2 study before task planning proceeds.`;
 
     if (doctrineVersion.status === "Awaiting Approval" || doctrineVersion.status === "Draft") {
       approval.status = "Open";
@@ -113,7 +137,8 @@ async function getNextDoctrineVersion(projectId: string) {
 
 export async function createDoctrineVersion(input: {
   projectId: string;
-  analysisRunId: string | null;
+  analysisRunId?: string | null;
+  studyRunId?: string | null;
   content: DoctrineDraftContent;
   generatedBy: string;
   status?: DoctrineVersionStatus;
@@ -125,6 +150,7 @@ export async function createDoctrineVersion(input: {
     projectId: input.projectId,
     version,
     analysisRunId: input.analysisRunId,
+    studyRunId: input.studyRunId,
     status: input.status ?? "Awaiting Approval",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -217,4 +243,14 @@ export async function recordDoctrineDecision(input: {
 
   await syncProjectDoctrineSnapshot(input.projectId, updatedVersion);
   return updatedVersion;
+}
+
+export async function deleteDoctrineVersions(projectId: string) {
+  if (isMongoConfigured()) {
+    const collection = await getDoctrineVersionsCollection();
+    await collection.deleteMany({ projectId });
+    return;
+  }
+
+  getFallbackStore().delete(projectId);
 }

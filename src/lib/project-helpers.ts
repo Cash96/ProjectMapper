@@ -1,7 +1,15 @@
 import { notFound } from "next/navigation";
 
 import type { ProjectRecord } from "@/domain/project-mapper";
-import { readProjectRecord } from "@/lib/project-store";
+import { getCurrentProjectRecord, listProjectRecords, readProjectRecord } from "@/lib/project-store";
+
+export async function getProjects() {
+  return listProjectRecords();
+}
+
+export async function getCurrentProject() {
+  return getCurrentProjectRecord();
+}
 
 export async function getProject(projectId: string) {
   const project = await readProjectRecord(projectId);
