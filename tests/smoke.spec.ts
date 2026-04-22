@@ -12,8 +12,11 @@ test("operator can reach the site and enter the dashboard", async ({ page }) => 
   await page.getByLabel("Password").fill(operatorPassword);
   await page.getByRole("button", { name: "Enter command center" }).click();
 
-  await expect(page).toHaveURL(/dashboard/);
+  await expect(page).toHaveURL(/\/projects\//);
   await expect(
-    page.getByRole("heading", { name: "ProjectMapper Overview" }),
+    page.getByRole("heading", { name: "Current stage" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Status" }),
   ).toBeVisible();
 });
