@@ -357,3 +357,102 @@ export interface DoctrineVersionRecord {
   revisionFeedback?: string;
   content: DoctrineDraftContent;
 }
+
+export type ExecutionRunStatus =
+  | "NotStarted"
+  | "Running"
+  | "Blocked"
+  | "AwaitingReview"
+  | "Completed"
+  | "Aborted";
+
+export type ExecutionOperatorReviewStatus = "Pending" | "Approved" | "Rejected";
+
+export type ExecutionAgentRole =
+  | "ProposalCompliance"
+  | "Coder"
+  | "DesignPhilosophy"
+  | "UiUx"
+  | "QaRisk";
+
+export type ExecutionAgentReviewStatus = "Pending" | "Approved" | "NeedsOperatorInput";
+
+export interface ExecutionProgressLogEntry {
+  step: number;
+  createdAt: string;
+  intent: string;
+  filesTouched: string[];
+  summary: string;
+  risks: string[];
+}
+
+export interface ExecutionAgentMessage {
+  id: string;
+  createdAt: string;
+  agentRole: ExecutionAgentRole;
+  kind: "Question" | "Note";
+  status: "Open" | "Answered";
+  message: string;
+  response?: string;
+  respondedAt?: string;
+}
+
+export interface ExecutionTestResult {
+  title: string;
+  status: "NotRun" | "Passed" | "Failed" | "Skipped";
+  detail: string;
+}
+
+export interface ExecutionFileChangeSummary {
+  path: string;
+  changeType: "create" | "update" | "delete";
+  summary: string;
+}
+
+export interface ExecutionCommitSummary {
+  sha: string;
+  message: string;
+  createdAt: string;
+}
+
+export interface ExecutionAgentReview {
+  agentRole: ExecutionAgentRole;
+  status: ExecutionAgentReviewStatus;
+  summary: string;
+  findings: string[];
+  risks: string[];
+  blockingQuestions: string[];
+  updatedAt: string;
+}
+
+export interface ExecutionFinalReport {
+  summary: string;
+  proposalAlignment: string[];
+  filesChanged: string[];
+  assumptionsMade: string[];
+  risks: string[];
+  manualTestRecommendations: string[];
+}
+
+export interface ExecutionRun {
+  id: string;
+  projectId: string;
+  featureId: string;
+  proposalId: string;
+  targetRepositoryId: string;
+  branchName: string;
+  baseBranch: string;
+  status: ExecutionRunStatus;
+  startedAt: string;
+  completedAt?: string;
+  progressLog: ExecutionProgressLogEntry[];
+  agentMessages: ExecutionAgentMessage[];
+  agentReviews: ExecutionAgentReview[];
+  changedFilesSummary: ExecutionFileChangeSummary[];
+  commitsSummary: ExecutionCommitSummary[];
+  testResults: ExecutionTestResult[];
+  risksIdentified: string[];
+  unresolvedQuestions: string[];
+  finalReport: ExecutionFinalReport | null;
+  operatorReviewStatus: ExecutionOperatorReviewStatus;
+}

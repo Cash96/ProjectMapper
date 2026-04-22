@@ -26,8 +26,27 @@ type GitHubTreeApiResponse = {
 };
 
 type GitHubContentApiResponse = {
+  sha?: string;
   content?: string;
   encoding?: string;
+};
+
+type GitHubRefCreateResponse = {
+  ref: string;
+  object: {
+    sha: string;
+  };
+};
+
+type GitHubContentWriteResponse = {
+  content: {
+    path: string;
+    sha: string;
+  };
+  commit: {
+    sha: string;
+    message: string;
+  };
 };
 
 export type GitHubRepositoryInspection = {
@@ -121,9 +140,19 @@ function formatGitHubError(status: number, payload: unknown, tokenConfigured: bo
 }
 
 async function fetchGitHubJson<T>(url: string, path: string, tokenConfigured: boolean) {
+  return fetchGitHubJsonWithInit<T>(url, path, tokenConfigured, undefined);
+}
+
+async function fetchGitHubJsonWithInit<T>(
+  url: string,
+  path: string,
+  tokenConfigured: boolean,
+  init: RequestInit | undefined,
+) {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: getGitHubHeaders(url),
     cache: "no-store",
+    ...init,
   });
 
   if (!response.ok) {
@@ -141,6 +170,29 @@ async function fetchGitHubJson<T>(url: string, path: string, tokenConfigured: bo
   return response.json() as Promise<T>;
 }
 
+async function fetchGitHubResponse(url: string, path: string, init?: RequestInit) {
+  const tokenConfigured = Boolean(getGitHubToken(url));
+  const response = await fetch(`https://api.github.com${path}`, {
+    headers: getGitHubHeaders(url),
+    cache: "no-store",
+    ...init,
+  });
+
+  if (!response.ok) {
+    let payload: unknown;
+
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    throw new Error(formatGitHubError(response.status, payload, tokenConfigured));
+  }
+
+  return response;
+}
+
 export async function getGitHubRepositoryTree(url: string, ref?: string) {
   const { owner, repo } = parseGitHubRepositoryUrl(url);
   const tokenConfigured = Boolean(getGitHubToken(url));
@@ -155,21 +207,42 @@ export async function getGitHubRepositoryTree(url: string, ref?: string) {
 }
 
 export async function getGitHubRepositoryFileText(url: string, path: string, ref?: string) {
+  const snapshot = await getGitHubRepositoryFileSnapshot(url, path, ref);
+  return snapshot?.text ?? null;
+}
+
+export async function getGitHubRepositoryFileSnapshot(url: string, path: string, ref?: string) {
   const { owner, repo } = parseGitHubRepositoryUrl(url);
   const tokenConfigured = Boolean(getGitHubToken(url));
   const encodedPath = path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
   const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : "";
-  const content = await fetchGitHubJson<GitHubContentApiResponse>(
-    url,
-    `/repos/${owner}/${repo}/contents/${encodedPath}${refQuery}`,
-    tokenConfigured,
-  );
+  try {
+    const content = await fetchGitHubJson<GitHubContentApiResponse>(
+      url,
+      `/repos/${owner}/${repo}/contents/${encodedPath}${refQuery}`,
+      tokenConfigured,
+    );
 
-  if (!content.content || content.encoding !== "base64") {
-    return null;
+    if (!content.content || content.encoding !== "base64") {
+      return {
+        path,
+        sha: content.sha ?? null,
+        text: null,
+      };
+    }
+
+    return {
+      path,
+      sha: content.sha ?? null,
+      text: Buffer.from(content.content.replace(/\n/g, ""), "base64").toString("utf8"),
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("404")) {
+      return null;
+    }
+
+    throw error;
   }
-
-  return Buffer.from(content.content.replace(/\n/g, ""), "base64").toString("utf8");
 }
 
 export async function inspectGitHubRepository(url: string): Promise<GitHubRepositoryInspection> {
@@ -225,4 +298,117 @@ export async function inspectGitHubRepository(url: string): Promise<GitHubReposi
       error: error instanceof Error ? error.message : "Unknown GitHub error",
     };
   }
+}
+
+export async function createGitHubBranch(url: string, branchName: string, baseBranch = "main") {
+  const { owner, repo } = parseGitHubRepositoryUrl(url);
+  const tokenConfigured = Boolean(getGitHubToken(url));
+  const branch = await fetchGitHubJson<GitHubBranchApiResponse>(
+    url,
+    `/repos/${owner}/${repo}/branches/${encodeURIComponent(baseBranch)}`,
+    tokenConfigured,
+  );
+
+  try {
+    const created = await fetchGitHubJsonWithInit<GitHubRefCreateResponse>(
+      url,
+      `/repos/${owner}/${repo}/git/refs`,
+      tokenConfigured,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ref: `refs/heads/${branchName}`,
+          sha: branch.commit.sha,
+        }),
+      },
+    );
+
+    return {
+      branchName,
+      sha: created.object.sha,
+      created: true,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("422")) {
+      return {
+        branchName,
+        sha: branch.commit.sha,
+        created: false,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function commitGitHubFileChange(input: {
+  url: string;
+  branch: string;
+  path: string;
+  content: string;
+  message: string;
+}) {
+  const { owner, repo } = parseGitHubRepositoryUrl(input.url);
+  const snapshot = await getGitHubRepositoryFileSnapshot(input.url, input.path, input.branch);
+
+  if (snapshot?.text === input.content) {
+    return null;
+  }
+
+  const encodedPath = input.path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const response = await fetchGitHubJsonWithInit<GitHubContentWriteResponse>(
+    input.url,
+    `/repos/${owner}/${repo}/contents/${encodedPath}`,
+    Boolean(getGitHubToken(input.url)),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        message: input.message,
+        content: Buffer.from(input.content, "utf8").toString("base64"),
+        branch: input.branch,
+        sha: snapshot?.sha ?? undefined,
+      }),
+    },
+  );
+
+  return {
+    path: response.content.path,
+    sha: response.commit.sha,
+    message: response.commit.message,
+  };
+}
+
+export async function deleteGitHubFile(input: {
+  url: string;
+  branch: string;
+  path: string;
+  message: string;
+}) {
+  const { owner, repo } = parseGitHubRepositoryUrl(input.url);
+  const snapshot = await getGitHubRepositoryFileSnapshot(input.url, input.path, input.branch);
+
+  if (!snapshot?.sha) {
+    return null;
+  }
+
+  const encodedPath = input.path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const response = await fetchGitHubResponse(
+    input.url,
+    `/repos/${owner}/${repo}/contents/${encodedPath}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({
+        message: input.message,
+        branch: input.branch,
+        sha: snapshot.sha,
+      }),
+    },
+  );
+
+  const payload = await response.json() as GitHubContentWriteResponse;
+  return {
+    path: input.path,
+    sha: payload.commit.sha,
+    message: payload.commit.message,
+  };
 }

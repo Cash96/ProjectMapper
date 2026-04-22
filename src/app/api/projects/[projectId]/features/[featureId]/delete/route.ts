@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { deleteFeatureExecutionRuns } from "@/lib/execution-store";
 import { deleteFeatureIntelligence, readFeatureInventoryRecord } from "@/lib/feature-store";
 import { deleteFeatureProposals } from "@/lib/proposal-store";
 import { getOperatorSession, getRedirectUrl } from "@/lib/request-utils";
@@ -30,6 +31,7 @@ export async function POST(
 
   await deleteFeatureIntelligence(projectId, featureId);
   await deleteFeatureProposals(projectId, featureId);
+  await deleteFeatureExecutionRuns(projectId, featureId);
 
   const searchParams = new URLSearchParams({
     deleted: "true",

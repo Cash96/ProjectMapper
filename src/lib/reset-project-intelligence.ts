@@ -1,6 +1,7 @@
 import type { ProjectRecord } from "@/domain/project-mapper";
 import { deleteAnalysisRuns } from "@/lib/analysis-store";
 import { deleteDoctrineVersions } from "@/lib/doctrine-store";
+import { deleteProjectExecutionRuns } from "@/lib/execution-store";
 import { deleteProjectFeatureIntelligence } from "@/lib/feature-store";
 import { deleteProjectFeatureProposals } from "@/lib/proposal-store";
 import { updateProjectRecord } from "@/lib/project-store";
@@ -54,6 +55,7 @@ export async function resetProjectIntelligence(project: ProjectRecord) {
     deleteRepoStudyRuns(project.id),
     deleteProjectFeatureIntelligence(project.id),
     deleteProjectFeatureProposals(project.id),
+    deleteProjectExecutionRuns(project.id),
     deleteDoctrineVersions(project.id),
     deleteAnalysisRuns(project.id),
   ]);

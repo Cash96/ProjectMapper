@@ -4,6 +4,7 @@ import { DeleteFeatureButton } from "@/components/delete-feature-button";
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
 import { StatusBadge } from "@/components/status-badge";
+import { getLatestExecutionRun } from "@/lib/execution-store";
 import { getFeatureStatusTone } from "@/lib/feature-intelligence";
 import { buildEditableProposalContent, getFeatureProposalReadiness } from "@/lib/feature-proposals";
 import {
@@ -91,6 +92,62 @@ function getProposalStatusTone(status: "Draft" | "Revision Requested" | "Approve
   return "info" as const;
 }
 
+function getExecutionStatusTone(status: "NotStarted" | "Running" | "Blocked" | "AwaitingReview" | "Completed" | "Aborted") {
+  if (status === "Completed") {
+    return "success" as const;
+  }
+
+  if (status === "Blocked") {
+    return "warning" as const;
+  }
+
+  if (status === "Aborted") {
+    return "danger" as const;
+  }
+
+  if (status === "AwaitingReview") {
+    return "info" as const;
+  }
+
+  if (status === "Running") {
+    return "info" as const;
+  }
+
+  return "neutral" as const;
+}
+
+function formatExecutionAgentRole(role: "ProposalCompliance" | "Coder" | "DesignPhilosophy" | "UiUx" | "QaRisk") {
+  if (role === "ProposalCompliance") {
+    return "Proposal compliance";
+  }
+
+  if (role === "DesignPhilosophy") {
+    return "Design philosophy";
+  }
+
+  if (role === "UiUx") {
+    return "UI/UX";
+  }
+
+  if (role === "QaRisk") {
+    return "QA / risk";
+  }
+
+  return "Coder";
+}
+
+function getExecutionAgentReviewTone(status: "Pending" | "Approved" | "NeedsOperatorInput") {
+  if (status === "Approved") {
+    return "success" as const;
+  }
+
+  if (status === "NeedsOperatorInput") {
+    return "warning" as const;
+  }
+
+  return "neutral" as const;
+}
+
 function StudyListCard({ title, items = [] }: { title: string; items?: string[] }) {
   return (
     <div className="surface-item-compact p-4">
@@ -113,6 +170,7 @@ function buildFeedbackMessage(input: {
   created?: string;
   deleted?: string;
   deletedName?: string;
+  execution?: string;
   guidance?: string;
   proposal?: string;
   proposalVersion?: string;
@@ -153,6 +211,34 @@ function buildFeedbackMessage(input: {
     return `Proposal v${input.proposalVersion} approved and ready for later execution.`;
   }
 
+  if (input.execution === "started") {
+    return "Execution started.";
+  }
+
+  if (input.execution === "blocked") {
+    return "Execution paused for operator input.";
+  }
+
+  if (input.execution === "continued") {
+    return "Execution continued.";
+  }
+
+  if (input.execution === "awaiting-review") {
+    return "Execution finished and is awaiting review.";
+  }
+
+  if (input.execution === "aborted") {
+    return "Execution was aborted.";
+  }
+
+  if (input.execution === "approved") {
+    return "Execution approved.";
+  }
+
+  if (input.execution === "rejected") {
+    return "Execution rejected.";
+  }
+
   if (input.study && input.role && input.version) {
     return `${input.role === "Source" ? "Repo 1" : "Repo 2"} feature study v${input.version} ${input.study.replace(/-/g, " ")}.`;
   }
@@ -179,6 +265,7 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
     created: getSearchValue(query.created),
     deleted: getSearchValue(query.deleted),
     deletedName: getSearchValue(query.deletedName),
+    execution: getSearchValue(query.execution),
     guidance: getSearchValue(query.guidance),
     proposal: getSearchValue(query.proposal),
     proposalVersion: getSearchValue(query.proposalVersion),
@@ -196,6 +283,7 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
         getLatestFeatureMappingSummary(projectId, selectedFeature.id),
         getLatestFeatureProposal(projectId, selectedFeature.id),
         getFeatureProposalReadiness(projectId, selectedFeature.id),
+        getLatestExecutionRun(projectId, selectedFeature.id),
       ])
     : null;
   const sourceRun = featureWorkspaceData?.[0] ?? null;
@@ -205,6 +293,7 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
   const mapping = featureWorkspaceData?.[4] ?? null;
   const latestProposal = featureWorkspaceData?.[5] ?? null;
   const proposalReadiness = featureWorkspaceData?.[6] ?? null;
+  const latestExecutionRun = featureWorkspaceData?.[7] ?? null;
   const hasBothStudies = Boolean(sourceRun?.status === "Complete" && targetRun?.status === "Complete");
   const requestedRepositoryRole = getSearchValue(query.repositoryRole) ?? getSearchValue(query.role);
   const selectedRepositoryRole = isRepositoryRole(requestedRepositoryRole)
@@ -216,6 +305,9 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
     ? { role: "Source" as const, latestRun: sourceRun, recentRuns: sourceRecentRuns }
     : { role: "Target" as const, latestRun: targetRun, recentRuns: targetRecentRuns };
   const editableProposal = latestProposal ? buildEditableProposalContent(latestProposal.content) : null;
+  const openExecutionMessages = latestExecutionRun?.agentMessages.filter((message) => message.status === "Open") ?? [];
+  const canStartExecution = latestProposal?.status === "Approved"
+    && (!latestExecutionRun || ["Completed", "Aborted"].includes(latestExecutionRun.status));
 
   return (
     <div className="page-stack">
@@ -699,6 +791,199 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
               <div className="callout-info mt-4">Proposal generation is blocked until the studies, mapping, and approved doctrine are all in place.</div>
             )}
           </SectionCard>
+
+          {latestProposal?.status === "Approved" ? (
+            <SectionCard eyebrow="Execution" title="Controlled build run">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="max-w-3xl">
+                  <p>Execution follows the approved proposal only. It should implement in small, traceable batches, pause when unclear, and stop at human review.</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <StatusBadge label={latestExecutionRun?.status ?? "NotStarted"} tone={latestExecutionRun ? getExecutionStatusTone(latestExecutionRun.status) : "neutral"} />
+                    <StatusBadge label={latestExecutionRun ? latestExecutionRun.operatorReviewStatus : "Pending"} tone={latestExecutionRun?.operatorReviewStatus === "Approved" ? "success" : latestExecutionRun?.operatorReviewStatus === "Rejected" ? "danger" : "info"} />
+                    <StatusBadge label={`Branch ${latestExecutionRun?.branchName ?? `feature/${selectedFeature.slug}-v${latestProposal.version}`}`} tone="info" />
+                  </div>
+                </div>
+
+                {canStartExecution ? (
+                  <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/execution/start`} method="post">
+                    <input type="hidden" name="proposalId" value={latestProposal.id} />
+                    <button type="submit" className="control-button-primary w-full sm:w-auto">Start execution</button>
+                  </form>
+                ) : null}
+              </div>
+
+              {latestExecutionRun ? (
+                <div className="mt-4 space-y-4">
+                  <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+                    <div className="surface-item p-4 sm:p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="font-medium text-[var(--ink-950)]">Progress log</p>
+                        <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">Chronological</p>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {latestExecutionRun.progressLog.length > 0 ? latestExecutionRun.progressLog.map((entry) => (
+                          <article key={`${entry.step}-${entry.createdAt}`} className="surface-item p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <p className="font-medium text-[var(--ink-950)]">Step {entry.step}: {entry.intent}</p>
+                              <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{formatTimestamp(entry.createdAt)}</p>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{entry.summary}</p>
+                            {entry.filesTouched.length > 0 ? <p className="mt-3 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">Files: {entry.filesTouched.join(" • ")}</p> : null}
+                            {entry.risks.length > 0 ? <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">{entry.risks.map((risk) => <li key={risk}>{risk}</li>)}</ul> : null}
+                          </article>
+                        )) : <p className="text-sm leading-6 text-[var(--ink-700)]">No execution progress has been recorded yet.</p>}
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="surface-item p-4 sm:p-5">
+                        <p className="font-medium text-[var(--ink-950)]">Agent questions</p>
+                        {openExecutionMessages.length > 0 ? (
+                          <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/execution/respond`} method="post" className="mt-4 space-y-4">
+                            <input type="hidden" name="executionRunId" value={latestExecutionRun.id} />
+                            {openExecutionMessages.map((message) => (
+                              <div key={message.id}>
+                                <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{formatExecutionAgentRole(message.agentRole)}</p>
+                                <p className="text-sm leading-6 text-[var(--ink-700)]">{message.message}</p>
+                                <textarea
+                                  name={`response-${message.id}`}
+                                  rows={4}
+                                  className="field-textarea mt-3"
+                                  placeholder="Answer this question so execution can continue."
+                                />
+                              </div>
+                            ))}
+                            <div className="flex justify-end">
+                              <button type="submit" className="control-button-primary w-full sm:w-auto">Save answers and continue</button>
+                            </div>
+                          </form>
+                        ) : latestExecutionRun.agentMessages.length > 0 ? (
+                          <div className="mt-4 space-y-3">
+                            {latestExecutionRun.agentMessages.map((message) => (
+                              <article key={message.id} className="surface-item-compact p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <StatusBadge label={message.status} tone={message.status === "Answered" ? "success" : "warning"} />
+                                  <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{formatTimestamp(message.createdAt)}</p>
+                                </div>
+                                <p className="mt-3 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{formatExecutionAgentRole(message.agentRole)}</p>
+                                <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{message.message}</p>
+                                {message.response ? <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]"><strong>Answer:</strong> {message.response}</p> : null}
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">No execution questions have been raised.</p>
+                        )}
+                      </div>
+
+                      <div className="surface-item p-4 sm:p-5">
+                        <p className="font-medium text-[var(--ink-950)]">Controls</p>
+                        <div className="mt-4 flex flex-col gap-2">
+                          {latestExecutionRun.status !== "Aborted" && latestExecutionRun.status !== "Completed" ? (
+                            <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/execution/abort`} method="post">
+                              <input type="hidden" name="executionRunId" value={latestExecutionRun.id} />
+                              <button type="submit" className="control-button-secondary w-full">Abort execution</button>
+                            </form>
+                          ) : null}
+
+                          {latestExecutionRun.status === "AwaitingReview" ? (
+                            <>
+                              <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/execution/review`} method="post">
+                                <input type="hidden" name="executionRunId" value={latestExecutionRun.id} />
+                                <input type="hidden" name="decision" value="Approved" />
+                                <button type="submit" className="control-button-primary w-full">Approve execution</button>
+                              </form>
+                              <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/execution/review`} method="post">
+                                <input type="hidden" name="executionRunId" value={latestExecutionRun.id} />
+                                <input type="hidden" name="decision" value="Rejected" />
+                                <button type="submit" className="control-button-secondary w-full">Reject execution</button>
+                              </form>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="surface-item p-4 sm:p-5">
+                      <p className="font-medium text-[var(--ink-950)]">Changed files</p>
+                      {latestExecutionRun.changedFilesSummary.length > 0 ? (
+                        <div className="mt-4 space-y-3">
+                          {latestExecutionRun.changedFilesSummary.map((entry, index) => (
+                            <article key={`${entry.path}-${index}`} className="surface-item-compact p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <p className="font-medium text-[var(--ink-950)]">{entry.path}</p>
+                                <StatusBadge label={entry.changeType} tone={entry.changeType === "delete" ? "warning" : entry.changeType === "create" ? "success" : "info"} />
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{entry.summary}</p>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">No file changes have been recorded yet.</p>
+                      )}
+                    </div>
+
+                    <div className="surface-item p-4 sm:p-5">
+                      <p className="font-medium text-[var(--ink-950)]">Commits</p>
+                      {latestExecutionRun.commitsSummary.length > 0 ? (
+                        <div className="mt-4 space-y-3">
+                          {latestExecutionRun.commitsSummary.map((commit) => (
+                            <article key={`${commit.sha}-${commit.createdAt}`} className="surface-item-compact p-4">
+                              <p className="font-medium text-[var(--ink-950)]">{commit.message}</p>
+                              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{commit.sha}</p>
+                              <p className="mt-2 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{formatTimestamp(commit.createdAt)}</p>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">No commits have been recorded yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="surface-item p-4 sm:p-5">
+                    <p className="font-medium text-[var(--ink-950)]">Agent reviews</p>
+                    {latestExecutionRun.agentReviews.length > 0 ? (
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        {latestExecutionRun.agentReviews.map((review) => (
+                          <article key={review.agentRole} className="surface-item-compact p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <p className="font-medium text-[var(--ink-950)]">{formatExecutionAgentRole(review.agentRole)}</p>
+                              <StatusBadge label={review.status} tone={getExecutionAgentReviewTone(review.status)} />
+                            </div>
+                            <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{review.summary}</p>
+                            {review.findings.length > 0 ? <StudyListCard title="Findings" items={review.findings} /> : null}
+                            {review.risks.length > 0 ? <StudyListCard title="Risks" items={review.risks} /> : null}
+                            {review.blockingQuestions.length > 0 ? <StudyListCard title="Blocking questions" items={review.blockingQuestions} /> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">No agent reviews have been recorded yet.</p>
+                    )}
+                  </div>
+
+                  {latestExecutionRun.finalReport ? (
+                    <div className="surface-item p-4 sm:p-5">
+                      <p className="font-medium text-[var(--ink-950)]">Final report</p>
+                      <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{latestExecutionRun.finalReport.summary}</p>
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        <StudyListCard title="Proposal alignment" items={latestExecutionRun.finalReport.proposalAlignment} />
+                        <StudyListCard title="Files changed" items={latestExecutionRun.finalReport.filesChanged} />
+                        <StudyListCard title="Assumptions made" items={latestExecutionRun.finalReport.assumptionsMade} />
+                        <StudyListCard title="Risks" items={latestExecutionRun.finalReport.risks} />
+                        <StudyListCard title="Manual test recommendations" items={latestExecutionRun.finalReport.manualTestRecommendations} />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="callout-info mt-4">This approved proposal is ready to enter controlled execution.</div>
+              )}
+            </SectionCard>
+          ) : null}
         </>
       ) : null}
 
