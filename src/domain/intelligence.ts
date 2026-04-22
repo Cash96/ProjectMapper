@@ -377,6 +377,17 @@ export type ExecutionAgentRole =
 
 export type ExecutionAgentReviewStatus = "Pending" | "Approved" | "NeedsOperatorInput";
 
+export type ExecutionInvestigationStatus = "NotStarted" | "InProgress" | "Completed";
+
+export type ExecutionDecisionCategory =
+  | "ImplementationDetail"
+  | "LowRiskAssumption"
+  | "ProductDecision"
+  | "AccessIssue"
+  | "HighImpactAmbiguity";
+
+export type ExecutionDecisionConfidence = "High" | "Medium" | "Low";
+
 export interface ExecutionProgressLogEntry {
   step: number;
   createdAt: string;
@@ -393,8 +404,38 @@ export interface ExecutionAgentMessage {
   kind: "Question" | "Note";
   status: "Open" | "Answered";
   message: string;
+  investigationSummary?: string[];
+  findings?: string[];
+  options?: string[];
+  recommendedDefault?: string;
+  decisionRequired?: string;
+  confidence?: ExecutionDecisionConfidence;
+  category?: ExecutionDecisionCategory;
   response?: string;
   respondedAt?: string;
+}
+
+export interface ExecutionInvestigationAction {
+  id: string;
+  createdAt: string;
+  title: string;
+  detail: string;
+  status: "Completed" | "Blocked" | "Skipped";
+}
+
+export interface ExecutionDecisionRecord {
+  id: string;
+  createdAt: string;
+  agentRole: ExecutionAgentRole;
+  issue: string;
+  category: ExecutionDecisionCategory;
+  confidence: ExecutionDecisionConfidence;
+  investigated: string[];
+  findings: string[];
+  options: string[];
+  recommendedDefault: string;
+  decisionRequired: string;
+  resolvedAutonomously: boolean;
 }
 
 export interface ExecutionTestResult {
@@ -443,15 +484,19 @@ export interface ExecutionRun {
   branchName: string;
   baseBranch: string;
   status: ExecutionRunStatus;
+  investigationStatus: ExecutionInvestigationStatus;
   startedAt: string;
   completedAt?: string;
   progressLog: ExecutionProgressLogEntry[];
+  investigationActions: ExecutionInvestigationAction[];
+  decisionRecords: ExecutionDecisionRecord[];
   agentMessages: ExecutionAgentMessage[];
   agentReviews: ExecutionAgentReview[];
   changedFilesSummary: ExecutionFileChangeSummary[];
   commitsSummary: ExecutionCommitSummary[];
   testResults: ExecutionTestResult[];
   risksIdentified: string[];
+  assumptionsLogged: string[];
   unresolvedQuestions: string[];
   finalReport: ExecutionFinalReport | null;
   operatorReviewStatus: ExecutionOperatorReviewStatus;

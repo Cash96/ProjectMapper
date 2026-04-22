@@ -34,7 +34,7 @@ export async function POST(
       proposalVersion: String(proposal.version),
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   } catch (error) {
@@ -43,7 +43,7 @@ export async function POST(
       error: error instanceof Error ? error.message : "Proposal generation failed.",
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }

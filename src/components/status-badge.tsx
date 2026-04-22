@@ -1,4 +1,4 @@
-type Tone = "neutral" | "info" | "success" | "warning" | "danger";
+export type Tone = "neutral" | "info" | "success" | "warning" | "danger";
 
 const toneClasses: Record<Tone, string> = {
   neutral: "bg-[var(--surface-muted)] text-[var(--ink-950)] border-[var(--line-strong)]",

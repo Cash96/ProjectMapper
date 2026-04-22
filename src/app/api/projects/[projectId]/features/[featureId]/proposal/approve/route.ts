@@ -25,7 +25,7 @@ export async function POST(
       error: "A proposal must exist before it can be approved.",
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }
@@ -38,7 +38,7 @@ export async function POST(
       error: "The requested proposal could not be found.",
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }
@@ -54,7 +54,7 @@ export async function POST(
     proposalVersion: String(proposal.version),
   });
 
-  return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+  return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
     status: 303,
   });
 }

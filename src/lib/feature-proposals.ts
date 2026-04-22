@@ -12,6 +12,7 @@ import type { ProjectRecord } from "@/domain/project-mapper";
 import { getLatestDoctrineVersion } from "@/lib/doctrine-store";
 import { getLatestFeatureMappingSummary, readFeatureInventoryRecord, readFeatureStudyRun, updateFeatureInventoryRecord } from "@/lib/feature-store";
 import { generateGeminiJson } from "@/lib/gemini";
+import { getGitHubRepositoryFileText } from "@/lib/github";
 import { getLatestFeatureProposal, upsertFeatureProposal, updateFeatureProposal } from "@/lib/proposal-store";
 
 const looseFeatureProposalSchema = z.object({
@@ -57,6 +58,15 @@ type ReadyFeatureProposalInputs = {
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeMultilineText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function toListItems(value: unknown): string[] {
@@ -124,8 +134,84 @@ function formatPromptData(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
-function serializeList(items: string[]) {
-  return items.join("\n");
+type ProposalRevisionRepoGrounding = {
+  path: string;
+  excerpt: string;
+};
+
+function serializeList(items: string[] | undefined | null) {
+  return Array.isArray(items) ? items.join("\n") : "";
+}
+
+function buildFeatureTerms(featureName: string, revisionNote?: string) {
+  return uniqueItems(
+    [featureName, revisionNote ?? ""]
+      .flatMap((value) => value.split(/[^a-zA-Z0-9]+/))
+      .map((value) => normalizeText(value))
+      .filter((value) => value.length >= 3),
+    12,
+  );
+}
+
+function buildGroundingExcerpt(content: string, featureTerms: string[]) {
+  const lines = content.split(/\r?\n/);
+  const lowerTerms = featureTerms.map((term) => term.toLowerCase());
+  const matchIndex = lines.findIndex((line) => lowerTerms.some((term) => line.toLowerCase().includes(term)));
+  const start = Math.max(0, (matchIndex >= 0 ? matchIndex : 0) - 4);
+  const end = Math.min(lines.length, start + 36);
+
+  return lines.slice(start, end).join("\n").slice(0, 3200);
+}
+
+function getProjectRepositoryUrl(project: ProjectRecord, role: "Source" | "Target") {
+  const repository = project.repositories.find((entry) => entry.role === role);
+
+  if (!repository) {
+    throw new Error(`${role === "Source" ? "Repo 1" : "Repo 2"} is not configured for this project.`);
+  }
+
+  return repository.url;
+}
+
+async function fetchRevisionRepo1Grounding(input: {
+  project: ProjectRecord;
+  featureName: string;
+  sourceStudy: FeatureStudyRunRecord;
+  revisionNote?: string;
+}) {
+  if (!input.revisionNote) {
+    return [] as ProposalRevisionRepoGrounding[];
+  }
+
+  const repositoryUrl = getProjectRepositoryUrl(input.project, "Source");
+  const candidatePaths = uniqueItems([
+    ...(input.sourceStudy.understanding?.relevantPaths ?? []),
+    ...input.sourceStudy.scopedPaths,
+  ], 8);
+
+  if (candidatePaths.length === 0) {
+    return [] as ProposalRevisionRepoGrounding[];
+  }
+
+  const featureTerms = buildFeatureTerms(input.featureName, input.revisionNote);
+  const files = await Promise.all(candidatePaths.map(async (path) => {
+    try {
+      const content = await getGitHubRepositoryFileText(repositoryUrl, path);
+
+      if (!content) {
+        return null;
+      }
+
+      return {
+        path,
+        excerpt: buildGroundingExcerpt(content, featureTerms),
+      } satisfies ProposalRevisionRepoGrounding;
+    } catch {
+      return null;
+    }
+  }));
+
+  return files.filter((entry): entry is ProposalRevisionRepoGrounding => Boolean(entry?.excerpt));
 }
 
 function normalizeDesignOptionPosture(value: string): FeatureProposalDesignOption["posture"] {
@@ -253,6 +339,7 @@ function buildProposalPrompt(input: {
   doctrineVersion: DoctrineVersionRecord;
   priorProposal: FeatureProposalRecord | null;
   revisionNote?: string;
+  revisionRepo1Grounding?: ProposalRevisionRepoGrounding[];
 }) {
   return [
     "You are generating a serious migration implementation proposal for ProjectMapper.",
@@ -282,6 +369,12 @@ function buildProposalPrompt(input: {
       highConfidenceAreas: input.sourceStudy.highConfidenceAreas,
       weakConfidenceAreas: input.sourceStudy.weakConfidenceAreas,
     }),
+    input.revisionRepo1Grounding && input.revisionRepo1Grounding.length > 0
+      ? "Fresh Repo 1 file grounding for this revision:"
+      : "",
+    input.revisionRepo1Grounding && input.revisionRepo1Grounding.length > 0
+      ? formatPromptData(input.revisionRepo1Grounding)
+      : "",
     "Repo 2 feature study:",
     formatPromptData({
       summary: input.targetStudy.understanding?.summary,
@@ -319,6 +412,9 @@ function buildProposalPrompt(input: {
     input.priorProposal?.operatorNotes ? `Operator notes: ${input.priorProposal.operatorNotes}` : "",
     input.priorProposal?.productDirectionDecisions ? `Product direction decisions: ${input.priorProposal.productDirectionDecisions}` : "",
     input.priorProposal?.constraintsNonNegotiables ? `Constraints and non-negotiables: ${input.priorProposal.constraintsNonNegotiables}` : "",
+    input.revisionRepo1Grounding && input.revisionRepo1Grounding.length > 0
+      ? "When revising, use the fresh Repo 1 file grounding above to restudy the actual source implementation before deciding how the proposal should change."
+      : "",
     "Proposal requirements:",
     "Act like a product designer, system architect, and collaborator, not a summarizer.",
     "Push beyond literal translation. Prefer better UX, stronger AI integration, cleaner system design, and more V2-native interaction patterns where justified.",
@@ -536,6 +632,12 @@ export async function generateFeatureProposal(input: {
 
   const readiness = await assertFeatureProposalReady(input.project.id, input.featureId);
   const priorProposal = await getLatestFeatureProposal(input.project.id, input.featureId);
+  const revisionRepo1Grounding = await fetchRevisionRepo1Grounding({
+    project: input.project,
+    featureName: feature.canonicalName,
+    sourceStudy: readiness.sourceStudy,
+    revisionNote: input.revisionNote,
+  });
   const raw = await generateGeminiJson({
     prompt: buildProposalPrompt({
       project: input.project,
@@ -546,6 +648,7 @@ export async function generateFeatureProposal(input: {
       doctrineVersion: readiness.doctrineVersion,
       priorProposal,
       revisionNote: input.revisionNote,
+      revisionRepo1Grounding,
     }),
     schema: looseFeatureProposalSchema,
   });
@@ -621,7 +724,7 @@ export async function updateFeatureProposalDraft(input: {
     status: proposal.status === "Approved" ? "Approved" : "Draft",
     content: input.content,
     operatorComments: normalizeText(input.operatorComments),
-    operatorResponses: normalizeText(input.operatorResponses),
+    operatorResponses: normalizeMultilineText(input.operatorResponses),
     operatorNotes: normalizeText(input.operatorNotes),
     productDirectionDecisions: normalizeText(input.productDirectionDecisions),
     constraintsNonNegotiables: normalizeText(input.constraintsNonNegotiables),
@@ -649,7 +752,7 @@ export function buildEditableProposalContent(input: FeatureProposalContent) {
     sourceBehaviorSummary: serializeList(input.sourceBehaviorSummary),
     targetContextSummary: serializeList(input.targetContextSummary),
     gapAssessment: serializeList(input.gapAssessment),
-    designDirectionOptions: input.designDirectionOptions,
+    designDirectionOptions: Array.isArray(input.designDirectionOptions) ? input.designDirectionOptions : [],
     governingV2Patterns: serializeList(input.governingV2Patterns),
     recommendedBuildShape: serializeList(input.recommendedBuildShape),
     operatorDesignQuestions: serializeList(input.operatorDesignQuestions),

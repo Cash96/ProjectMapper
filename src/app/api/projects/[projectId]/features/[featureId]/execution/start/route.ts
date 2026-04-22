@@ -20,7 +20,7 @@ export async function POST(
 
   if (!proposalId) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: "An approved proposal is required before execution can start.",
       })),
@@ -37,7 +37,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         execution: run.status === "Blocked" ? "blocked" : "started",
         executionRunId: run.id,
@@ -46,7 +46,7 @@ export async function POST(
     );
   } catch (error) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: error instanceof Error ? error.message : "Execution could not start.",
       })),

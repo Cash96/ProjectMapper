@@ -1,10 +1,9 @@
-import Link from "next/link";
-
 import { PageHeader } from "@/components/page-header";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { ResetIntelligenceButton } from "@/components/reset-intelligence-button";
 import { SectionCard } from "@/components/section-card";
 import { StatusBadge } from "@/components/status-badge";
+import { FieldShell, NextActionCard, SegmentedLinkTabs, StepRail } from "@/components/workflow-primitives";
 import { getLatestAnalysisRun } from "@/lib/analysis-store";
 import { getLatestDoctrineVersion } from "@/lib/doctrine-store";
 import { getProject } from "@/lib/project-helpers";
@@ -78,6 +77,12 @@ function StudyListCard({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+type UnderstandingView = "repo-1" | "repo-2" | "questions" | "doctrine";
+
+function isUnderstandingView(value: string | undefined): value is UnderstandingView {
+  return value === "repo-1" || value === "repo-2" || value === "questions" || value === "doctrine";
+}
+
 export default async function UnderstandingPage({ params, searchParams }: UnderstandingPageProps) {
   const { projectId } = await params;
   const query = await searchParams;
@@ -97,6 +102,7 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
 
   const error = getSearchValue(query.error);
   const requestedRepositoryId = getSearchValue(query.repositoryId);
+  const requestedView = getSearchValue(query.view);
   const repositoryStates = [sourceRepository, targetRepository]
     .filter((repository): repository is NonNullable<typeof repository> => Boolean(repository))
     .map((repository) => {
@@ -113,10 +119,17 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
   const selectedRepositoryState = repositoryStates.find((entry) => entry.repository.id === requestedRepositoryId)
     ?? repositoryStates[0]
     ?? null;
-  const selectedRepository = selectedRepositoryState?.repository ?? null;
-  const selectedSnapshot = selectedRepositoryState?.snapshot ?? null;
-  const selectedHistory = selectedRepositoryState?.history ?? [];
-  const selectedLatestRun = selectedRepositoryState?.latestRun ?? null;
+  const defaultView: UnderstandingView = requestedRepositoryId === targetRepository?.id ? "repo-2" : "repo-1";
+  const activeView = isUnderstandingView(requestedView) ? requestedView : defaultView;
+  const activeRepositoryState = activeView === "repo-2"
+    ? repositoryStates.find((entry) => entry.repository.role === "Target") ?? selectedRepositoryState
+    : activeView === "repo-1"
+      ? repositoryStates.find((entry) => entry.repository.role === "Source") ?? selectedRepositoryState
+      : selectedRepositoryState;
+  const selectedRepository = activeRepositoryState?.repository ?? null;
+  const selectedSnapshot = activeRepositoryState?.snapshot ?? null;
+  const selectedHistory = activeRepositoryState?.history ?? [];
+  const selectedLatestRun = activeRepositoryState?.latestRun ?? null;
   const doctrineApproval = project.approvals.find((entry) => entry.target.entity === "doctrine") ?? null;
   const feedbackMessage = error
     ? error
@@ -149,13 +162,76 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
     : selectedSnapshot?.statusTone === "warning"
       ? "callout-warning"
       : "callout-info";
+  const topTabs = [
+    sourceRepository
+      ? {
+          label: "Repo 1",
+          href: `/projects/${project.id}/understanding?view=repo-1&repositoryId=${sourceRepository.id}`,
+          active: activeView === "repo-1",
+          badge: sourceSnapshot?.latestVersionLabel ?? "new",
+        }
+      : null,
+    targetRepository
+      ? {
+          label: "Repo 2",
+          href: `/projects/${project.id}/understanding?view=repo-2&repositoryId=${targetRepository.id}`,
+          active: activeView === "repo-2",
+          badge: targetSnapshot?.latestVersionLabel ?? "new",
+        }
+      : null,
+    {
+      label: "AI Questions",
+      href: `/projects/${project.id}/understanding?view=questions${selectedRepository ? `&repositoryId=${selectedRepository.id}` : ""}`,
+      active: activeView === "questions",
+      badge: String(operatorQuestions.length),
+    },
+    {
+      label: "Doctrine",
+      href: `/projects/${project.id}/understanding?view=doctrine${selectedRepository ? `&repositoryId=${selectedRepository.id}` : ""}`,
+      active: activeView === "doctrine",
+      badge: project.doctrine.approvalState === "Approved" ? "ready" : "review",
+    },
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const repoReadinessSteps = [
+    {
+      number: 1,
+      title: "Repo 1 study",
+      description: "Capture what exists today in the source product and how it behaves.",
+      state: sourceSnapshot?.latestVersionLabel && sourceSnapshot.latestVersionLabel !== "None" ? "complete" : "current",
+      badges: sourceSnapshot ? [{ label: sourceSnapshot.statusLabel, tone: sourceSnapshot.statusTone }] : undefined,
+    },
+    {
+      number: 2,
+      title: "Repo 2 study",
+      description: "Ground migration decisions in current target architecture and constraints.",
+      state: targetSnapshot?.latestVersionLabel && targetSnapshot.latestVersionLabel !== "None"
+        ? "complete"
+        : sourceSnapshot?.latestVersionLabel && sourceSnapshot.latestVersionLabel !== "None"
+          ? "current"
+          : "upcoming",
+      badges: targetSnapshot ? [{ label: targetSnapshot.statusLabel, tone: targetSnapshot.statusTone }] : undefined,
+    },
+    {
+      number: 3,
+      title: "Questions and corrections",
+      description: "Close the gaps the AI cannot infer by itself.",
+      state: operatorQuestions.length === 0 && guidanceEntries.length > 0 ? "complete" : "upcoming",
+    },
+    {
+      number: 4,
+      title: "Doctrine",
+      description: "Convert Repo 2 understanding into reusable product and architecture rules.",
+      state: project.doctrine.approvalState === "Approved" ? "complete" : activeView === "doctrine" ? "current" : "upcoming",
+      badges: [{ label: project.doctrine.approvalState, tone: project.doctrine.approvalState === "Approved" ? "success" : "warning" }],
+    },
+  ] as const;
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="Understanding"
-        title={selectedRepository ? `${selectedRepository.name} intelligence` : "Understanding"}
-        description="Select one repository at a time, then inspect its study status, understanding, AI questions, guidance, and history in one focused view."
+        eyebrow="System Knowledge"
+        title={activeView === "doctrine" ? "Rules" : activeView === "questions" ? "Questions" : selectedRepository ? getRepositoryStudyOrdinal(selectedRepository) : "System Knowledge"}
+        description="One workspace at a time."
         actions={[
           { label: "Home", href: `/projects/${project.id}` },
           { label: "Features", href: `/projects/${project.id}/features` },
@@ -166,57 +242,33 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
         <div className={error ? "callout-danger" : "callout-info"}>{feedbackMessage}</div>
       ) : null}
 
-      <SectionCard eyebrow="Repository focus" title="Choose a repository">
-        <div className="grid gap-3 lg:grid-cols-2">
-          {repositoryStates.map(({ repository, snapshot }) => {
-            const selected = repository.id === selectedRepository?.id;
-
-            return (
-              <Link
-                key={repository.id}
-                href={`/projects/${project.id}/understanding?repositoryId=${repository.id}`}
-                className={`rounded-[1.35rem] border p-4 transition ${
-                  selected
-                    ? "border-[rgba(50,95,155,0.28)] bg-[rgba(50,95,155,0.07)] shadow-[0_12px_28px_rgba(50,95,155,0.08)]"
-                    : "border-[var(--line-soft)] bg-white/70 hover:border-[rgba(50,95,155,0.2)] hover:bg-white"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="section-label text-[var(--ink-500)]">{getRepositoryStudyOrdinal(repository)}</p>
-                    <p className="mt-2 text-lg font-semibold tracking-tight text-[var(--ink-950)]">{repository.name}</p>
-                  </div>
-                  {selected ? <StatusBadge label="Selected" tone="info" /> : null}
-                </div>
-                <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{repository.notes}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <StatusBadge label={snapshot?.statusLabel ?? "Not studied"} tone={snapshot?.statusTone ?? "neutral"} />
-                  <StatusBadge label={snapshot?.latestVersionLabel ? `Latest ${snapshot.latestVersionLabel}` : "No runs yet"} tone="info" />
-                </div>
-              </Link>
-            );
-          })}
+      <SectionCard eyebrow="Workspace" title="Choose a step">
+        <div className="workflow-shell">
+          <SegmentedLinkTabs items={topTabs} />
+          <NextActionCard
+            eyebrow="Next Step"
+            title={activeView === "doctrine" ? "Review rules" : activeView === "questions" ? "Answer questions" : `Study ${selectedRepository ? getRepositoryStudyOrdinal(selectedRepository) : "repo"}`}
+            description={selectedSnapshot?.statusLabel ?? project.doctrine.approvalState}
+            badges={selectedSnapshot ? [{ label: selectedSnapshot.latestVersionLabel === "None" ? "Not started" : selectedSnapshot.latestVersionLabel, tone: selectedSnapshot.statusTone }] : [{ label: project.doctrine.approvalState, tone: project.doctrine.approvalState === "Approved" ? "success" : "warning" }]}
+          />
+          <StepRail steps={repoReadinessSteps as unknown as Parameters<typeof StepRail>[0]["steps"]} />
         </div>
       </SectionCard>
 
-      {selectedRepository && selectedSnapshot ? (
-        <SectionCard eyebrow={getRepositoryStudyOrdinal(selectedRepository)} title={`${selectedRepository.name} understanding`}>
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-            <div className="max-w-3xl">
-              <p>{selectedRepository.notes}</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <StatusBadge label={selectedSnapshot.statusLabel} tone={selectedSnapshot.statusTone} />
-                <StatusBadge label={`Latest ${selectedSnapshot.latestVersionLabel}`} tone="info" />
-                <StatusBadge label={selectedSnapshot.stale ? "Stale" : "Fresh"} tone={selectedSnapshot.stale ? "warning" : "success"} />
-                <StatusBadge label={`Last study ${formatTimestamp(selectedSnapshot.lastStudiedAt)}`} tone="neutral" />
-              </div>
+      {(activeView === "repo-1" || activeView === "repo-2") && selectedRepository && selectedSnapshot ? (
+        <SectionCard eyebrow={getRepositoryStudyOrdinal(selectedRepository)} title="Current step">
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge label={selectedSnapshot.statusLabel} tone={selectedSnapshot.statusTone} />
+              <StatusBadge label={selectedSnapshot.latestVersionLabel === "None" ? "Not started" : selectedSnapshot.latestVersionLabel} tone="info" />
+              <StatusBadge label={selectedSnapshot.stale ? "Stale" : "Fresh"} tone={selectedSnapshot.stale ? "warning" : "success"} />
             </div>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap xl:justify-end">
+            <div className="flex flex-col gap-2">
               <form action={`/api/projects/${project.id}/repositories/${selectedRepository.id}/study`} method="post">
                 <PendingSubmitButton
                   idleLabel={getRepositoryStudyLabel(selectedRepository)}
                   pendingLabel={`Studying ${getRepositoryStudyOrdinal(selectedRepository)}...`}
-                  className="control-button-primary w-full sm:w-auto"
+                  className="control-button-primary w-full"
                 />
               </form>
               {selectedLatestRun?.status === "Complete" ? (
@@ -225,7 +277,7 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                   <PendingSubmitButton
                     idleLabel="Continue Study"
                     pendingLabel="Continuing study..."
-                    className="control-button-secondary w-full sm:w-auto"
+                    className="control-button-secondary w-full"
                     disabled={selectedLatestRun.operatorGuidance.length === 0}
                   />
                 </form>
@@ -233,26 +285,32 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
             </div>
           </div>
 
-          <div className={`${statusCalloutTone} mt-5`}>{selectedSnapshot.statusDetail}</div>
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">View details</summary>
+            <div className={`${statusCalloutTone} mt-4`}>{selectedSnapshot.statusDetail}</div>
+            <p className="mt-4 text-sm leading-6 text-[var(--ink-700)]">{selectedRepository.notes}</p>
+          </details>
 
           {selectedLatestRun?.understanding ? (
-            <div className="mt-5 space-y-4">
-              <div className="surface-item p-4 sm:p-5">
-                <p className="font-medium text-[var(--ink-950)]">Summary</p>
-                <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{selectedLatestRun.understanding.summary}</p>
+            <div className="mt-4 space-y-4">
+              <div className="surface-item p-4">
+                <p className="text-sm leading-6 text-[var(--ink-700)]">{selectedLatestRun.understanding.summary}</p>
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-2">
-                <StudyListCard title="Purpose" items={selectedLatestRun.understanding.purpose} />
-                <StudyListCard title="Capabilities" items={selectedLatestRun.understanding.capabilities} />
-                <StudyListCard title="Core workflows" items={selectedLatestRun.understanding.coreWorkflows} />
-                <StudyListCard title="Important entities" items={selectedLatestRun.understanding.importantEntities} />
-                <StudyListCard title="Architecture shape" items={selectedLatestRun.understanding.architectureShape} />
-                <StudyListCard title="Migration risks" items={selectedLatestRun.understanding.migrationRisks} />
-              </div>
+              <details className="surface-item p-4">
+                <summary className="cursor-pointer font-medium text-[var(--ink-950)]">View details</summary>
+                <div className="mt-4 space-y-4">
+                  <StudyListCard title="Purpose" items={selectedLatestRun.understanding.purpose} />
+                  <StudyListCard title="Capabilities" items={selectedLatestRun.understanding.capabilities} />
+                  <StudyListCard title="Workflows" items={selectedLatestRun.understanding.coreWorkflows} />
+                  <StudyListCard title="Entities" items={selectedLatestRun.understanding.importantEntities} />
+                  <StudyListCard title="Architecture" items={selectedLatestRun.understanding.architectureShape} />
+                  <StudyListCard title="Risks" items={selectedLatestRun.understanding.migrationRisks} />
+                </div>
+              </details>
 
-              <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
-                  <p className="font-medium text-[var(--ink-950)]">Recent study history</p>
+              <details className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
+                  <summary className="cursor-pointer font-medium text-[var(--ink-950)]">Recent runs</summary>
                   <div className="mt-3 space-y-3">
                     {selectedHistory.length > 0 ? selectedHistory.map((run) => (
                       <article key={run.id} className="surface-item p-4">
@@ -264,22 +322,30 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                       </article>
                     )) : <p>No study history yet.</p>}
                   </div>
-              </div>
+              </details>
             </div>
           ) : (
             <div className="mt-5 surface-item p-4 sm:p-5">
-              <p className="font-medium text-[var(--ink-950)]">No usable understanding recorded yet</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">
-                Study {getRepositoryStudyOrdinal(selectedRepository)} to generate grounded repository intelligence. Once the study completes, the understanding, questions, guidance, and history for this repo will appear here.
-              </p>
+              <p className="font-medium text-[var(--ink-950)]">No study yet</p>
             </div>
           )}
         </SectionCard>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+      {activeView === "questions" ? (
+      <div className="space-y-4">
         <SectionCard eyebrow="AI questions" title="Uncertainties and follow-up needs">
           <div className="space-y-4">
+            {repositoryStates.length > 1 ? (
+              <SegmentedLinkTabs
+                items={repositoryStates.map(({ repository }) => ({
+                  label: getRepositoryStudyOrdinal(repository),
+                  href: `/projects/${project.id}/understanding?view=questions&repositoryId=${repository.id}`,
+                  active: repository.id === selectedRepository?.id,
+                }))}
+              />
+            ) : null}
+
             {operatorQuestions.length > 0 ? (
               <div className="space-y-3">
                 {operatorQuestions.map((question, index) => (
@@ -288,11 +354,8 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                       <p className="font-medium text-[var(--ink-950)]">{question.question}</p>
                       <StatusBadge label={question.priority} tone={question.priority === "High" ? "warning" : "info"} />
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{question.rationale}</p>
                     <div className="mt-4">
-                      <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor={`question-answer-${index}`}>
-                        Your response
-                      </label>
+                      <FieldShell label="Your response" htmlFor={`question-answer-${index}`}>
                       <input type="hidden" name={`questionText-${question.id}`} value={question.question} form="repo-guidance-form" />
                       <textarea
                         id={`question-answer-${index}`}
@@ -302,6 +365,7 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                         placeholder="Answer this question if you have guidance for it."
                         form="repo-guidance-form"
                       />
+                      </FieldShell>
                     </div>
                   </article>
                 ))}
@@ -312,10 +376,7 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
 
             {selectedLatestRun ? (
               <div className="surface-item-compact p-4 sm:p-5">
-                <p className="font-medium text-[var(--ink-950)]">Respond to this study</p>
-                <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">
-                  Add corrections, answer any of the questions above, or tell the next study pass what to focus on. Any question field with text will be included automatically when you save.
-                </p>
+                <p className="font-medium text-[var(--ink-950)]">Save guidance</p>
                 <form
                   id="repo-guidance-form"
                   action={`/api/projects/${project.id}/repositories/${selectedRepository?.id}/study/guidance`}
@@ -323,21 +384,19 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                   className="mt-4 space-y-3"
                 >
                   <input type="hidden" name="runId" value={selectedLatestRun.id} />
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="general-guidance">
-                      Additional guidance
-                    </label>
-                    <p className="mb-2 text-sm leading-6 text-[var(--ink-700)]">
-                      Use this for broader correction, missing context, or anything that does not fit one question.
-                    </p>
-                  </div>
-                  <textarea
-                    id="general-guidance"
-                    name="guidance"
-                    rows={5}
-                    className="field-textarea"
-                    placeholder={`Add general operator correction for ${getRepositoryStudyOrdinal(selectedRepository!)} or leave this blank if you only want to answer specific questions.`}
-                  />
+                  <FieldShell
+                    label="Additional guidance"
+                    htmlFor="general-guidance"
+                    hint="Example: The feature is missing in Repo 2."
+                  >
+                    <textarea
+                      id="general-guidance"
+                      name="guidance"
+                      rows={3}
+                      className="field-textarea"
+                      placeholder="Add a short correction or next-pass instruction."
+                    />
+                  </FieldShell>
                   <div className="flex justify-end">
                     <PendingSubmitButton
                       idleLabel="Save guidance responses"
@@ -351,56 +410,55 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
           </div>
         </SectionCard>
 
-        <SectionCard eyebrow="Operator guidance" title="Saved guidance">
-          {guidanceEntries.length > 0 ? (
-            <div className="space-y-3">
-              {guidanceEntries.map((entry) => (
+        <SectionCard eyebrow="Saved" title="Guidance history">
+          <details>
+            <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">View guidance</summary>
+            <div className="mt-4 space-y-3">
+              {guidanceEntries.length > 0 ? guidanceEntries.map((entry) => (
                 <article key={entry.id} className="surface-item p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">
                     <span>{entry.author}</span>
                     <span>{formatTimestamp(entry.createdAt)}</span>
                   </div>
-                  <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{entry.guidance}</p>
+                  <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{entry.guidance}</p>
                 </article>
-              ))}
+              )) : <div className="callout-info">No saved guidance.</div>}
             </div>
-          ) : (
-            <div className="callout-info">No operator guidance has been saved yet.</div>
-          )}
+          </details>
         </SectionCard>
       </div>
+      ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-        <SectionCard eyebrow="Derived summaries" title="Doctrine and analysis">
+      {activeView === "doctrine" ? (
+      <div className="space-y-4">
+        <SectionCard eyebrow="Rules" title="Current step">
           <div className="space-y-4">
             <div className="surface-item p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="font-medium text-[var(--ink-950)]">Doctrine snapshot</p>
+                <p className="font-medium text-[var(--ink-950)]">Rules</p>
                 <StatusBadge label={project.doctrine.approvalState} tone={project.doctrine.approvalState === "Approved" ? "success" : project.doctrine.approvalState === "Awaiting Approval" ? "warning" : "neutral"} />
               </div>
-              <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{project.doctrine.summary}</p>
+              <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{project.doctrine.summary}</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <StatusBadge label={project.doctrine.version} tone="info" />
-                <StatusBadge label={`Updated ${project.doctrine.lastUpdatedAt}`} tone="neutral" />
+                <StatusBadge label={project.doctrine.lastUpdatedAt} tone="neutral" />
               </div>
 
               {!latestDoctrineVersion ? (
                 <form action={`/api/projects/${project.id}/doctrine/generate`} method="post" className="mt-5 space-y-3">
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="doctrine-feedback">
-                      Doctrine generation guidance
-                    </label>
-                    <p className="mb-2 text-sm leading-6 text-[var(--ink-700)]">
-                      Optional guidance for generating doctrine from the latest usable Repo 2 study.
-                    </p>
+                  <FieldShell
+                    label="Doctrine generation guidance"
+                    htmlFor="doctrine-feedback"
+                    hint="Example: Prefer guided workflow over dashboards."
+                  >
                     <textarea
                       id="doctrine-feedback"
                       name="feedback"
-                      rows={4}
+                      rows={3}
                       className="field-textarea"
-                      placeholder="Add doctrine-specific direction, product philosophy, or constraints before generating the draft."
+                      placeholder="Add a short rule or design direction."
                     />
-                  </div>
+                  </FieldShell>
                   <div className="flex justify-end">
                     <PendingSubmitButton
                       idleLabel="Generate doctrine draft"
@@ -430,10 +488,7 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                     return (
                   <form action={`/api/projects/${project.id}/doctrine/save`} method="post" className="space-y-4">
                     <input type="hidden" name="doctrineId" value={latestDoctrineVersion.id} />
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="doctrine-summary">
-                        Doctrine summary
-                      </label>
+                    <FieldShell label="Doctrine summary" htmlFor="doctrine-summary">
                       <textarea
                         id="doctrine-summary"
                         name="summary"
@@ -441,51 +496,35 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                         defaultValue={latestDoctrineVersion.content.summary}
                         className="field-textarea"
                       />
-                    </div>
-                    <div className="grid gap-4 xl:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="product-doctrine">
-                          Product doctrine
-                        </label>
+                    </FieldShell>
+                    <details className="surface-item p-4">
+                      <summary className="cursor-pointer font-medium text-[var(--ink-950)]">Edit rules</summary>
+                    <div className="mt-4 space-y-4">
+                      <FieldShell label="Product doctrine" htmlFor="product-doctrine">
                         <textarea id="product-doctrine" name="productDoctrine" rows={7} defaultValue={toTextareaValue(productDoctrine)} className="field-textarea" />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="interaction-model">
-                          Interaction model
-                        </label>
+                      </FieldShell>
+                      <FieldShell label="Interaction model" htmlFor="interaction-model">
                         <textarea id="interaction-model" name="interactionModel" rows={7} defaultValue={toTextareaValue(interactionModel)} className="field-textarea" />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="migration-rules">
-                          Migration rules
-                        </label>
+                      </FieldShell>
+                      <FieldShell label="Migration rules" htmlFor="migration-rules">
                         <textarea id="migration-rules" name="migrationRules" rows={7} defaultValue={toTextareaValue(migrationRules)} className="field-textarea" />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="feature-design-rules">
-                          Feature design rules
-                        </label>
+                      </FieldShell>
+                      <FieldShell label="Feature design rules" htmlFor="feature-design-rules">
                         <textarea id="feature-design-rules" name="featureDesignRules" rows={7} defaultValue={toTextareaValue(featureDesignRules)} className="field-textarea" />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="anti-patterns">
-                          Anti-patterns
-                        </label>
+                      </FieldShell>
+                      <FieldShell label="Anti-patterns" htmlFor="anti-patterns">
                         <textarea id="anti-patterns" name="antiPatterns" rows={6} defaultValue={toTextareaValue(antiPatterns)} className="field-textarea" />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="technical-constraints">
-                          Technical constraints
-                        </label>
+                      </FieldShell>
+                      <FieldShell label="Technical constraints" htmlFor="technical-constraints">
                         <textarea id="technical-constraints" name="technicalConstraints" rows={6} defaultValue={toTextareaValue(technicalConstraints)} className="field-textarea" />
-                      </div>
+                      </FieldShell>
                       <div className="xl:col-span-2">
-                        <label className="mb-2 block text-sm font-medium text-[var(--ink-950)]" htmlFor="grounding-references">
-                          Grounding references
-                        </label>
+                        <FieldShell label="Grounding references" htmlFor="grounding-references">
                         <textarea id="grounding-references" name="groundingReferences" rows={6} defaultValue={toTextareaValue(groundingReferences)} className="field-textarea" />
+                        </FieldShell>
                       </div>
                     </div>
+                    </details>
                     <div className="flex justify-end">
                       <PendingSubmitButton
                         idleLabel="Save doctrine draft"
@@ -502,16 +541,15 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
                       <form action={`/api/approvals/${doctrineApproval.id}/decide`} method="post" className="surface-item-compact p-4 space-y-3">
                         <input type="hidden" name="projectId" value={project.id} />
                         <input type="hidden" name="decision" value="revision-requested" />
-                        <label className="block text-sm font-medium text-[var(--ink-950)]" htmlFor="doctrine-revision-note">
-                          Request revision
-                        </label>
-                        <textarea
-                          id="doctrine-revision-note"
-                          name="note"
-                          rows={4}
-                          className="field-textarea"
-                          placeholder="Explain what should change before doctrine can be approved."
-                        />
+                        <FieldShell label="Request revision" htmlFor="doctrine-revision-note">
+                          <textarea
+                            id="doctrine-revision-note"
+                            name="note"
+                            rows={4}
+                            className="field-textarea"
+                            placeholder="Explain what should change before doctrine can be approved."
+                          />
+                        </FieldShell>
                         <div className="flex justify-end">
                           <PendingSubmitButton
                             idleLabel="Request doctrine revision"
@@ -544,29 +582,28 @@ export default async function UnderstandingPage({ params, searchParams }: Unders
               )}
             </div>
 
-            <div className="surface-item p-4 sm:p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="font-medium text-[var(--ink-950)]">Latest analysis snapshot</p>
+            <details className="surface-item p-4 sm:p-5">
+              <summary className="cursor-pointer font-medium text-[var(--ink-950)]">View analysis</summary>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <StatusBadge label={latestAnalysisRun ? `v${latestAnalysisRun.version}` : "None"} tone="info" />
               </div>
-              <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">
+              <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">
                 {latestAnalysisRun
                   ? latestAnalysisRun.summary.join(" ")
-                  : "No separate analysis runs are currently stored for this project."}
+                  : "No analysis stored."}
               </p>
-            </div>
+            </details>
           </div>
         </SectionCard>
 
-        <SectionCard eyebrow="Safety" title="Reset intelligence">
-          <p>
-            Use a full reset when you need to wipe repo studies, discovered features, feature studies, mapping summaries, doctrine versions, reports, and AI outputs while preserving the project and repo connections.
-          </p>
-          <div className="mt-5">
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">Optional actions</summary>
+          <div className="mt-4">
             <ResetIntelligenceButton action={`/api/projects/${project.id}/intelligence/reset`} />
           </div>
-        </SectionCard>
+        </details>
       </div>
+      ) : null}
     </div>
   );
 }

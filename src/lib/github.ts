@@ -70,16 +70,25 @@ function normalizeRepositoryUrl(url: string) {
   return url.replace(/\.git$/, "").replace(/\/$/, "");
 }
 
-function getGitHubToken(url: string) {
-  const normalizedUrl = normalizeRepositoryUrl(url);
-  const repoAUrl = normalizeRepositoryUrl(appConfig.repositories.repoA);
-  const repoBUrl = normalizeRepositoryUrl(appConfig.repositories.repoB);
+function getRepositoryIdentityKey(url: string) {
+  try {
+    const { owner, repo } = parseGitHubRepositoryUrl(url);
+    return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  } catch {
+    return normalizeRepositoryUrl(url).toLowerCase();
+  }
+}
 
-  if (normalizedUrl === repoAUrl) {
+function getGitHubToken(url: string) {
+  const repositoryKey = getRepositoryIdentityKey(url);
+  const repoAKey = getRepositoryIdentityKey(appConfig.repositories.repoA);
+  const repoBKey = getRepositoryIdentityKey(appConfig.repositories.repoB);
+
+  if (repositoryKey === repoAKey) {
     return appConfig.repositoryTokens.repoA || appConfig.repositoryTokens.default;
   }
 
-  if (normalizedUrl === repoBUrl) {
+  if (repositoryKey === repoBKey) {
     return appConfig.repositoryTokens.repoB || appConfig.repositoryTokens.default;
   }
 

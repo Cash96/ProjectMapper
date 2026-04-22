@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { DeleteFeatureButton } from "@/components/delete-feature-button";
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
 import { StatusBadge } from "@/components/status-badge";
+import { FieldShell, NextActionCard, SelectablePanel, StepRail } from "@/components/workflow-primitives";
 import { getLatestExecutionRun } from "@/lib/execution-store";
 import { getFeatureStatusTone } from "@/lib/feature-intelligence";
 import { buildEditableProposalContent, getFeatureProposalReadiness } from "@/lib/feature-proposals";
@@ -54,7 +56,7 @@ function isRepositoryRole(value: string | undefined): value is "Source" | "Targe
 }
 
 function buildFeatureHref(projectId: string, featureId: string, repositoryRole: "Source" | "Target") {
-  return `/projects/${projectId}/features?feature=${featureId}&repositoryRole=${repositoryRole}`;
+  return `/projects/${projectId}/features/${featureId}?repositoryRole=${repositoryRole}`;
 }
 
 function getProposalCheckAction(input: {
@@ -253,9 +255,30 @@ function buildFeedbackMessage(input: {
 export default async function FeaturesPage({ params, searchParams }: FeaturesPageProps) {
   const { projectId } = await params;
   const query = await searchParams;
+  const selectedFeatureId = getSearchValue(query.feature);
+
+  if (selectedFeatureId) {
+    const nextSearchParams = new URLSearchParams();
+
+    Object.entries(query).forEach(([key, value]) => {
+      if (key === "feature" || value == null) {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach((entry) => nextSearchParams.append(key, entry));
+        return;
+      }
+
+      nextSearchParams.set(key, value);
+    });
+
+    const nextUrl = nextSearchParams.toString();
+    redirect(`/projects/${projectId}/features/${selectedFeatureId}${nextUrl ? `?${nextUrl}` : ""}`);
+  }
+
   const project = await getProject(projectId);
   const features = await listFeatureInventory(projectId);
-  const selectedFeatureId = getSearchValue(query.feature);
   const selectedFeature = selectedFeatureId ? await readFeatureInventoryRecord(projectId, selectedFeatureId) : null;
   const discoveryAction = getSearchValue(query.discovery);
   const count = getSearchValue(query.count);
@@ -308,6 +331,110 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
   const openExecutionMessages = latestExecutionRun?.agentMessages.filter((message) => message.status === "Open") ?? [];
   const canStartExecution = latestProposal?.status === "Approved"
     && (!latestExecutionRun || ["Completed", "Aborted"].includes(latestExecutionRun.status));
+  const sourceStudyComplete = sourceRun?.status === "Complete";
+  const targetStudyComplete = targetRun?.status === "Complete";
+  const currentStep = !sourceStudyComplete ? 1 : !targetStudyComplete ? 2 : !mapping ? 3 : !latestProposal ? 4 : 5;
+  const featureNextAction = !selectedFeature
+    ? {
+        eyebrow: "Feature workflow",
+        title: "Select a migration unit",
+        description: "Choose a feature from the inventory to open its study, mapping, proposal, and review workflow.",
+        badges: [{ label: `${features.length} tracked`, tone: "info" as const }],
+      }
+    : !sourceStudyComplete
+      ? {
+          eyebrow: "Immediate next move",
+          title: "Run Repo 1 feature study",
+          description: "Start with the source implementation so the migration unit has real behavioral grounding before target analysis begins.",
+          action: { label: "Study Repo 1", href: `${buildFeatureHref(project.id, selectedFeature.id, "Source")}#feature-study` },
+          badges: [{ label: "Step 1", tone: "info" as const }],
+        }
+      : !targetStudyComplete
+        ? {
+            eyebrow: "Immediate next move",
+            title: "Run Repo 2 feature study",
+            description: "Use the source understanding to inspect whether the target already has an analog, partial implementation, or gap.",
+            action: { label: "Study Repo 2", href: `${buildFeatureHref(project.id, selectedFeature.id, "Target")}#feature-study` },
+            badges: [{ label: "Step 2", tone: "info" as const }],
+          }
+        : !mapping
+          ? {
+              eyebrow: "Immediate next move",
+              title: "Refresh the mapping",
+              description: "Now that both studies exist, compare them to establish what is missing, partial, or already present in Repo 2.",
+              action: { label: "Go to mapping", href: `${buildFeatureHref(project.id, selectedFeature.id, selectedStudy.role)}#feature-mapping` },
+              badges: [{ label: "Step 3", tone: "info" as const }],
+            }
+          : !latestProposal
+            ? {
+                eyebrow: "Immediate next move",
+                title: "Generate the proposal boundary",
+                description: "Use study output, mapping, and doctrine to define the implementation direction before any execution starts.",
+                action: { label: "Go to proposal", href: `${buildFeatureHref(project.id, selectedFeature.id, selectedStudy.role)}#feature-proposal` },
+                badges: [{ label: "Step 4", tone: "info" as const }],
+              }
+            : latestProposal.status !== "Approved"
+              ? {
+                  eyebrow: "Immediate next move",
+                  title: "Refine and approve the proposal",
+                  description: "Use review notes and co-design inputs to tighten the proposal until it becomes the approved execution boundary.",
+                  action: { label: "Go to review notes", href: `${buildFeatureHref(project.id, selectedFeature.id, selectedStudy.role)}#feature-review-notes` },
+                  badges: [{ label: latestProposal.status, tone: getProposalStatusTone(latestProposal.status) }],
+                }
+              : canStartExecution
+                ? {
+                    eyebrow: "Immediate next move",
+                    title: "Start controlled execution",
+                    description: "The proposal is approved. The feature is ready to move into branch-based, proposal-bound execution.",
+                    action: { label: "Go to execution", href: `${buildFeatureHref(project.id, selectedFeature.id, selectedStudy.role)}#feature-execution` },
+                    badges: [{ label: "Ready", tone: "success" as const }],
+                  }
+                : {
+                    eyebrow: "Execution state",
+                    title: "Review the active build run",
+                    description: "Execution is already in progress or awaiting review. Use the execution workspace to inspect logs, questions, and review output.",
+                    action: { label: "Open execution", href: `${buildFeatureHref(project.id, selectedFeature.id, selectedStudy.role)}#feature-execution` },
+                    badges: latestExecutionRun ? [{ label: latestExecutionRun.status, tone: getExecutionStatusTone(latestExecutionRun.status) }] : [],
+                  };
+  const workflowSteps: Parameters<typeof StepRail>[0]["steps"] = selectedFeature
+    ? [
+        {
+          number: 1,
+          title: "Repo 1 study",
+          description: "Capture source behavior, workflows, and implementation touchpoints.",
+          state: sourceStudyComplete ? "complete" : currentStep === 1 ? "current" : "upcoming",
+          badges: [{ label: sourceRun?.status ?? "Not studied", tone: sourceStudyComplete ? "success" : sourceRun ? "info" : "neutral" }],
+        },
+        {
+          number: 2,
+          title: "Repo 2 study",
+          description: "Inspect target reality and likely landing zones for the migration.",
+          state: targetStudyComplete ? "complete" : currentStep === 2 ? "current" : sourceStudyComplete ? "upcoming" : "upcoming",
+          badges: [{ label: targetRun?.status ?? "Not studied", tone: targetStudyComplete ? "success" : targetRun ? "info" : "neutral" }],
+        },
+        {
+          number: 3,
+          title: "Mapping",
+          description: "Compare both studies to define what exists, what is partial, and what is missing.",
+          state: mapping ? "complete" : currentStep === 3 ? "current" : "upcoming",
+          badges: [{ label: mapping ? mapping.status : "Not mapped", tone: mapping ? "success" : "neutral" }],
+        },
+        {
+          number: 4,
+          title: "Proposal",
+          description: "Generate the approved implementation direction for the feature.",
+          state: latestProposal ? "complete" : currentStep === 4 ? "current" : "upcoming",
+          badges: latestProposal ? [{ label: latestProposal.status, tone: getProposalStatusTone(latestProposal.status) }] : undefined,
+        },
+        {
+          number: 5,
+          title: "Review notes / co-design",
+          description: "Shape the proposal with operator notes, decisions, and revision requests.",
+          state: latestProposal ? "current" : "upcoming",
+          badges: latestProposal ? [{ label: latestProposal.status === "Approved" ? "Ready for execution" : "Reviewing", tone: latestProposal.status === "Approved" ? "success" : "warning" }] : undefined,
+        },
+      ]
+    : [];
 
   return (
     <div className="page-stack">
@@ -325,78 +452,148 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
         <div className={error ? "callout-danger" : "callout-info"}>{feedbackMessage}</div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-        <SectionCard eyebrow="Discovery" title="Refresh AI-discovered topics">
-          <p>
-            Use the latest completed Repo 1 study to extract migration-sized product features. This is the inventory layer that sits between repo understanding and future proposal generation.
-          </p>
-          <form action={`/api/projects/${project.id}/features/discover`} method="post" className="mt-5 flex justify-start">
-            <button type="submit" className="control-button-primary w-full sm:w-auto">
-              Refresh feature inventory from Repo 1 study
-            </button>
-          </form>
-        </SectionCard>
+      <div className="space-y-4">
+        <div className="space-y-4">
+          <SectionCard eyebrow="Inventory" title={`${features.length} tracked feature topic${features.length === 1 ? "" : "s"}`}>
+            {features.length > 0 ? (
+              <div className="space-y-3">
+                {features.map((feature) => {
+                  const selected = feature.id === selectedFeature?.id;
 
-        <SectionCard eyebrow="Manual topic" title="Add an operator-suggested feature">
-          <form action={`/api/projects/${project.id}/features/create`} method="post" className="space-y-3">
-            <input
-              type="text"
-              name="canonicalName"
-              className="field-input"
-              placeholder="Feature name, for example Standards alignment workflow"
-            />
-            <textarea
-              name="summary"
-              rows={4}
-              className="field-textarea"
-              placeholder="Why this topic matters and what part of the migration it represents."
-            />
-            <input
-              type="text"
-              name="tags"
-              className="field-input"
-              placeholder="Optional tags separated by commas"
-            />
-            <div className="flex justify-end">
-              <button type="submit" className="control-button-secondary w-full sm:w-auto">
-                Add manual topic
-              </button>
-            </div>
-          </form>
-        </SectionCard>
-      </div>
-
-      {selectedFeature ? (
-        <>
-          <SectionCard eyebrow="Selected feature" title={selectedFeature.canonicalName}>
-            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-              <div>
-                <p>{selectedFeature.summary}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <StatusBadge label={selectedFeature.status} tone={getFeatureStatusTone(selectedFeature.status)} />
-                  <StatusBadge label={selectedFeature.priority} tone={selectedFeature.priority === "High" ? "warning" : selectedFeature.priority === "Medium" ? "info" : "neutral"} />
-                  <StatusBadge label={`${selectedFeature.confidence} confidence`} tone={selectedFeature.confidence === "High" ? "success" : selectedFeature.confidence === "Medium" ? "info" : "warning"} />
-                </div>
+                  return (
+                    <SelectablePanel
+                      key={feature.id}
+                      href={`/projects/${project.id}/features/${feature.id}`}
+                      selected={selected}
+                    >
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-base font-semibold text-[var(--ink-950)]">{feature.canonicalName}</p>
+                              {selected ? <StatusBadge label="Open" tone="info" /> : null}
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{feature.summary}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <StatusBadge label={feature.status} tone={getFeatureStatusTone(feature.status)} />
+                          <StatusBadge label={feature.priority} tone={feature.priority === "High" ? "warning" : feature.priority === "Medium" ? "info" : "neutral"} />
+                          <StatusBadge label={`${feature.confidence} confidence`} tone={feature.confidence === "High" ? "success" : feature.confidence === "Medium" ? "info" : "warning"} />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <StatusBadge label={formatSourceLabel(feature.discoverySource)} tone="neutral" />
+                          {feature.latestSourceStudyRunId ? <StatusBadge label="Repo 1 studied" tone="success" /> : <StatusBadge label="Repo 1 pending" tone="warning" />}
+                          {feature.latestTargetStudyRunId ? <StatusBadge label="Repo 2 studied" tone="success" /> : <StatusBadge label="Repo 2 pending" tone="warning" />}
+                        </div>
+                      </div>
+                    </SelectablePanel>
+                  );
+                })}
               </div>
-              <div className="surface-item p-4 sm:p-5">
-                <p className="section-label text-[var(--ink-500)]">Evidence and tags</p>
-                <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">
-                  {selectedFeature.sourceEvidence.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-                {selectedFeature.tags.length > 0 ? <p className="mt-4 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{selectedFeature.tags.join(" • ")}</p> : null}
-                <div className="mt-5">
-                  <DeleteFeatureButton
-                    action={`/api/projects/${project.id}/features/${selectedFeature.id}/delete`}
-                    featureName={selectedFeature.canonicalName}
-                  />
-                </div>
+            ) : (
+              <div className="callout-info">
+                No feature topics have been recorded yet. Run Repo 1 study first, then refresh discovery, or add a manual topic to start focused study.
               </div>
-            </div>
+            )}
           </SectionCard>
 
-          <SectionCard eyebrow="Feature study" title={`${roleLabel(selectedStudy.role)} workspace`}>
+          <SectionCard eyebrow="Discovery" title="Refresh AI-discovered topics">
+            <p>
+              Use the latest completed Repo 1 study to extract migration-sized product features. This inventory becomes the operator’s working queue.
+            </p>
+            <form action={`/api/projects/${project.id}/features/discover`} method="post" className="mt-5 flex justify-start">
+              <button type="submit" className="control-button-primary w-full sm:w-auto">
+                Refresh feature inventory from Repo 1 study
+              </button>
+            </form>
+          </SectionCard>
+
+          <SectionCard eyebrow="Manual topic" title="Add an operator-suggested feature">
+            <form action={`/api/projects/${project.id}/features/create`} method="post" className="space-y-4">
+              <FieldShell label="Feature name" htmlFor="canonicalName" hint="Use a migration-sized name that matches one coherent user-facing capability.">
+                <input
+                  id="canonicalName"
+                  type="text"
+                  name="canonicalName"
+                  className="field-input"
+                  placeholder="Feature name, for example Standards alignment workflow"
+                />
+              </FieldShell>
+              <FieldShell label="Why this matters" htmlFor="summary" hint="Describe the problem space or workflow this topic represents.">
+                <textarea
+                  id="summary"
+                  name="summary"
+                  rows={4}
+                  className="field-textarea"
+                  placeholder="Why this topic matters and what part of the migration it represents."
+                />
+              </FieldShell>
+              <FieldShell label="Tags" htmlFor="tags" hint="Optional comma-separated labels for routing or search.">
+                <input
+                  id="tags"
+                  type="text"
+                  name="tags"
+                  className="field-input"
+                  placeholder="Optional tags separated by commas"
+                />
+              </FieldShell>
+              <div className="flex justify-end">
+                <button type="submit" className="control-button-secondary w-full sm:w-auto">
+                  Add manual topic
+                </button>
+              </div>
+            </form>
+          </SectionCard>
+        </div>
+
+        <div className="space-y-4">
+          <NextActionCard
+            eyebrow={featureNextAction.eyebrow}
+            title={featureNextAction.title}
+            description={featureNextAction.description}
+            action={"action" in featureNextAction ? featureNextAction.action : undefined}
+            badges={featureNextAction.badges}
+          />
+
+          {selectedFeature ? (
+            <>
+              <div className="grid gap-4 2xl:grid-cols-[0.92fr_1.08fr]">
+                <SectionCard eyebrow="Selected feature" title={selectedFeature.canonicalName}>
+                  <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                    <div>
+                      <p>{selectedFeature.summary}</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <StatusBadge label={selectedFeature.status} tone={getFeatureStatusTone(selectedFeature.status)} />
+                        <StatusBadge label={selectedFeature.priority} tone={selectedFeature.priority === "High" ? "warning" : selectedFeature.priority === "Medium" ? "info" : "neutral"} />
+                        <StatusBadge label={`${selectedFeature.confidence} confidence`} tone={selectedFeature.confidence === "High" ? "success" : selectedFeature.confidence === "Medium" ? "info" : "warning"} />
+                      </div>
+                    </div>
+                    <div className="surface-item p-4 sm:p-5">
+                      <p className="section-label text-[var(--ink-500)]">Evidence and tags</p>
+                      <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">
+                        {selectedFeature.sourceEvidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                      {selectedFeature.tags.length > 0 ? <p className="mt-4 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{selectedFeature.tags.join(" • ")}</p> : null}
+                      <div className="mt-5">
+                        <DeleteFeatureButton
+                          action={`/api/projects/${project.id}/features/${selectedFeature.id}/delete`}
+                          featureName={selectedFeature.canonicalName}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                <SectionCard eyebrow="Workflow" title="Feature progression">
+                  <StepRail steps={workflowSteps} />
+                </SectionCard>
+              </div>
+
+              <div id="feature-study">
+              <SectionCard eyebrow="Steps 1-2" title={`${roleLabel(selectedStudy.role)} study workspace`}>
             <div className="grid gap-3 sm:grid-cols-2">
               {([
                 { role: "Source" as const, latestRun: sourceRun },
@@ -415,7 +612,7 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
                     }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-base font-semibold text-[var(--ink-950)]">{roleLabel(role)}</p>
+                        <p className="text-base font-semibold text-[var(--ink-950)]">Step {role === "Source" ? "1" : "2"} · {roleLabel(role)}</p>
                       {selected ? <StatusBadge label="Open below" tone="info" /> : null}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -445,17 +642,19 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
                 </div>
                 <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/study`} method="post" className="mt-5 space-y-3">
                   <input type="hidden" name="repositoryRole" value={selectedStudy.role} />
-                  <textarea
-                    name="guidance"
-                    rows={4}
-                    className="field-textarea"
-                    placeholder={selectedStudy.role === "Source"
-                      ? "Optional Repo 1 guidance. Use this to narrow the study to a workflow, subsystem, or implementation assumption."
-                      : "Optional Repo 2 guidance. Example: This feature does not exist in Repo 2 today. Focus on analogous areas or where it would most likely live."}
-                  />
-                  <p className="text-xs leading-6 text-[var(--ink-500)]">
-                    Guidance is optional. Use it to say the feature is missing in this repo, point to likely analogs, or constrain the next pass.
-                  </p>
+                  <FieldShell
+                    label={`Guidance for ${roleLabel(selectedStudy.role)}`}
+                    hint="Optional. Use this to say the feature is missing in this repo, point to likely analogs, or constrain the next pass."
+                  >
+                    <textarea
+                      name="guidance"
+                      rows={4}
+                      className="field-textarea"
+                      placeholder={selectedStudy.role === "Source"
+                        ? "Optional Repo 1 guidance. Use this to narrow the study to a workflow, subsystem, or implementation assumption."
+                        : "Optional Repo 2 guidance. Example: This feature does not exist in Repo 2 today. Focus on analogous areas or where it would most likely live."}
+                    />
+                  </FieldShell>
                   <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                     <button type="submit" className="control-button-primary w-full sm:w-auto">Study {roleLabel(selectedStudy.role)}</button>
                     {selectedStudy.latestRun?.status === "Complete" ? (
@@ -498,7 +697,9 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
                     <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/study/guidance`} method="post" className="space-y-3">
                       <input type="hidden" name="runId" value={selectedStudy.latestRun.id} />
                       <input type="hidden" name="repositoryRole" value={selectedStudy.role} />
-                      <textarea name="guidance" rows={5} className="field-textarea" placeholder={`Add ${roleLabel(selectedStudy.role)} guidance for the next pass.`} />
+                      <FieldShell label="Saved guidance" hint="Use this to steer the next pass once you have read the current study output.">
+                        <textarea name="guidance" rows={5} className="field-textarea" placeholder={`Add ${roleLabel(selectedStudy.role)} guidance for the next pass.`} />
+                      </FieldShell>
                       <div className="flex justify-end">
                         <button type="submit" className="control-button-primary w-full sm:w-auto">Save guidance</button>
                       </div>
@@ -522,9 +723,10 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
               ) : selectedStudy.latestRun?.understandingError ? <div className="callout-danger">{selectedStudy.latestRun.understandingError}</div> : <div className="callout-info">No study output recorded yet.</div>}
             </div>
           </SectionCard>
+          </div>
 
           <div id="feature-mapping">
-          <SectionCard eyebrow="Mapping" title="Source-target comparison">
+          <SectionCard eyebrow="Step 3" title="Source-target comparison">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="max-w-3xl">
                 <p>Use this mapping to understand what already exists in Repo 2, what only partially exists, and what remains missing for this feature.</p>
@@ -559,7 +761,8 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
           </SectionCard>
           </div>
 
-          <SectionCard eyebrow="Proposal" title="Implementation proposal">
+          <div id="feature-proposal">
+          <SectionCard eyebrow="Step 4" title="Implementation proposal">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="max-w-3xl">
                 <p>Use grounded feature intelligence, mapping, and approved doctrine to define what should be built in Repo 2 before any execution starts.</p>
@@ -696,7 +899,7 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
                       <div className="surface-item-compact p-4">
                         <p className="font-medium text-[var(--ink-950)]">Revision delta</p>
                         <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">
-                          {latestProposal.content.revisionDelta.map((item) => <li key={item}>{item}</li>)}
+                          {(latestProposal.content.revisionDelta ?? []).map((item) => <li key={item}>{item}</li>)}
                         </ul>
                       </div>
                     </div>
@@ -791,8 +994,173 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
               <div className="callout-info mt-4">Proposal generation is blocked until the studies, mapping, and approved doctrine are all in place.</div>
             )}
           </SectionCard>
+          </div>
+
+          {latestProposal ? (
+            <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/proposal/update`} method="post" className="space-y-4">
+              <input type="hidden" name="proposalId" value={latestProposal.id} />
+
+              <SectionCard eyebrow="Proposal detail" title="AI proposal output">
+                <details className="surface-item p-4 sm:p-5" open>
+                  <summary className="cursor-pointer list-none font-medium text-[var(--ink-950)]">Current proposal sections</summary>
+                  <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">AI-generated proposal sections, design options, strategic questions, and revision delta.</p>
+                  <div className="mt-4 space-y-4">
+                    <FieldShell label="Proposal summary" htmlFor="proposalSummary">
+                      <textarea id="proposalSummary" name="proposalSummary" rows={5} defaultValue={editableProposal?.proposalSummary} className="field-textarea" />
+                    </FieldShell>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <FieldShell label="Source behavior" htmlFor="sourceBehaviorSummary">
+                        <textarea id="sourceBehaviorSummary" name="sourceBehaviorSummary" rows={8} defaultValue={editableProposal?.sourceBehaviorSummary} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Target context" htmlFor="targetContextSummary">
+                        <textarea id="targetContextSummary" name="targetContextSummary" rows={8} defaultValue={editableProposal?.targetContextSummary} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Gap assessment" htmlFor="gapAssessment">
+                        <textarea id="gapAssessment" name="gapAssessment" rows={8} defaultValue={editableProposal?.gapAssessment} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Governing V2 patterns" htmlFor="governingV2Patterns">
+                        <textarea id="governingV2Patterns" name="governingV2Patterns" rows={8} defaultValue={editableProposal?.governingV2Patterns} className="field-textarea" />
+                      </FieldShell>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium text-[var(--ink-950)]">Design direction options</p>
+                      <div className="mt-3 grid gap-4 xl:grid-cols-3">
+                        {editableProposal?.designDirectionOptions.map((option) => (
+                          <div key={`${option.title}-${option.posture}`} className="surface-item-compact p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-medium text-[var(--ink-950)]">{option.title}</p>
+                              <StatusBadge label={option.posture} tone={option.posture === "Recommended / V2-native" ? "success" : option.posture === "More Ambitious" ? "warning" : "info"} />
+                            </div>
+                            <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{option.description}</p>
+                            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-500)]">Pros</p>
+                            <ul className="mt-2 space-y-2 text-sm leading-6 text-[var(--ink-700)]">{option.pros.map((item) => <li key={item}>{item}</li>)}</ul>
+                            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-500)]">Cons</p>
+                            <ul className="mt-2 space-y-2 text-sm leading-6 text-[var(--ink-700)]">{option.cons.map((item) => <li key={item}>{item}</li>)}</ul>
+                            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-500)]">Doctrine alignment</p>
+                            <ul className="mt-2 space-y-2 text-sm leading-6 text-[var(--ink-700)]">{option.doctrineAlignment.map((item) => <li key={item}>{item}</li>)}</ul>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <FieldShell label="Recommended build shape" htmlFor="recommendedBuildShape">
+                        <textarea id="recommendedBuildShape" name="recommendedBuildShape" rows={8} defaultValue={editableProposal?.recommendedBuildShape} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Operator design questions" htmlFor="operatorDesignQuestions">
+                        <textarea id="operatorDesignQuestions" name="operatorDesignQuestions" rows={8} defaultValue={editableProposal?.operatorDesignQuestions} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Explicit non-goals" htmlFor="explicitNonGoals">
+                        <textarea id="explicitNonGoals" name="explicitNonGoals" rows={8} defaultValue={editableProposal?.explicitNonGoals} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Risks and unknowns" htmlFor="risksAndUnknowns">
+                        <textarea id="risksAndUnknowns" name="risksAndUnknowns" rows={8} defaultValue={editableProposal?.risksAndUnknowns} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Additional follow-up questions" htmlFor="questionsForOperator">
+                        <textarea id="questionsForOperator" name="questionsForOperator" rows={8} defaultValue={editableProposal?.questionsForOperator} className="field-textarea" />
+                      </FieldShell>
+                      <FieldShell label="Suggested implementation scope" htmlFor="suggestedImplementationScope">
+                        <textarea id="suggestedImplementationScope" name="suggestedImplementationScope" rows={8} defaultValue={editableProposal?.suggestedImplementationScope} className="field-textarea" />
+                      </FieldShell>
+                    </div>
+
+                    <div className="surface-item-compact p-4">
+                      <p className="font-medium text-[var(--ink-950)]">Revision delta</p>
+                      <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">
+                        {(latestProposal.content.revisionDelta ?? []).map((item) => <li key={item}>{item}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+                </details>
+              </SectionCard>
+
+              <div id="feature-review-notes">
+              <SectionCard eyebrow="Step 5" title="Review notes and co-design">
+                <details className="surface-item p-4 sm:p-5" open>
+                  <summary className="cursor-pointer list-none font-medium text-[var(--ink-950)]">Operator input workspace</summary>
+                  <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">Use this space to shape product direction before requesting the next proposal revision.</p>
+                  <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                    <div className="space-y-4">
+                      <FieldShell label="Operator notes" htmlFor="operatorNotes" hint="Freeform thinking space for rough ideas, strategy notes, gut reactions, and incomplete thoughts.">
+                        <textarea id="operatorNotes" name="operatorNotes" rows={6} defaultValue={latestProposal.operatorNotes} className="field-textarea" placeholder="Capture rough thinking, ideas, reactions, and strategy notes here." />
+                      </FieldShell>
+                      <FieldShell label="Product direction decisions" htmlFor="productDirectionDecisions" hint="Short intentional answers that define how this feature should feel and behave.">
+                        <textarea id="productDirectionDecisions" name="productDirectionDecisions" rows={6} defaultValue={latestProposal.productDirectionDecisions} className="field-textarea" placeholder="Example: This should feel like guided discovery, not search." />
+                      </FieldShell>
+                      <FieldShell label="Constraints / non-negotiables" htmlFor="constraintsNonNegotiables" hint="Explicit guardrails the next revision must obey.">
+                        <textarea id="constraintsNonNegotiables" name="constraintsNonNegotiables" rows={6} defaultValue={latestProposal.constraintsNonNegotiables} className="field-textarea" placeholder="Example: Must integrate with the artifact system and cannot introduce new standalone pages." />
+                      </FieldShell>
+                    </div>
+                    <div className="space-y-4">
+                      <FieldShell label="Responses to AI questions" htmlFor="operatorResponses">
+                        <textarea id="operatorResponses" name="operatorResponses" rows={6} defaultValue={latestProposal.operatorResponses} className="field-textarea" placeholder="Answer the proposal design questions or follow-up questions here." />
+                      </FieldShell>
+                      <FieldShell label="Proposal commentary" htmlFor="operatorComments">
+                        <textarea id="operatorComments" name="operatorComments" rows={6} defaultValue={latestProposal.operatorComments} className="field-textarea" placeholder="Use this for direct commentary on the current proposal draft." />
+                      </FieldShell>
+                      <div className="flex justify-end">
+                        <button type="submit" className="control-button-secondary w-full sm:w-auto">Save co-design notes</button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                  <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
+                    <p className="font-medium text-[var(--ink-950)]">Proposal history</p>
+                    <div className="mt-3 space-y-3">
+                      {latestProposal.revisionHistory.length > 0 ? latestProposal.revisionHistory.slice().reverse().map((entry) => (
+                        <article key={`${entry.version}-${entry.createdAt}-${entry.action}`} className="surface-item p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="font-medium text-[var(--ink-950)]">v{entry.version} {entry.action.toLowerCase()}</p>
+                            <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{entry.actor}</p>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{formatTimestamp(entry.createdAt)}</p>
+                          {entry.note ? <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{entry.note}</p> : null}
+                        </article>
+                      )) : <p>No proposal history recorded yet.</p>}
+                    </div>
+                  </div>
+                  <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
+                    <p className="font-medium text-[var(--ink-950)]">How revision works now</p>
+                    <ul className="mt-3 space-y-2">
+                      <li>AI proposal sections remain editable and reviewable.</li>
+                      <li>Operator notes, product decisions, constraints, and responses become structured inputs to the next revision.</li>
+                      <li>Revised proposals are expected to explain what changed and why in the revision delta.</li>
+                    </ul>
+                  </div>
+                </div>
+              </SectionCard>
+              </div>
+            </form>
+          ) : null}
+
+          {latestProposal ? (
+            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+              <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/proposal/revise`} method="post" className="surface-item p-4 sm:p-5 space-y-3">
+                <FieldShell label="Request revision" htmlFor="revisionNote" hint="Explain what should change in the next proposal draft. Saved review notes and responses will also be used.">
+                  <textarea id="revisionNote" name="revisionNote" rows={5} className="field-textarea" />
+                </FieldShell>
+                <div className="flex justify-end">
+                  <button type="submit" className="control-button-primary w-full sm:w-auto">Request revision</button>
+                </div>
+              </form>
+
+              <form action={`/api/projects/${project.id}/features/${selectedFeature.id}/proposal/approve`} method="post" className="surface-item p-4 sm:p-5 space-y-3">
+                <input type="hidden" name="proposalId" value={latestProposal.id} />
+                <p className="font-medium text-[var(--ink-950)]">Approve proposal</p>
+                <p className="text-sm leading-6 text-[var(--ink-700)]">Approving this marks the proposal as the accepted implementation direction for later execution. It does not start coding.</p>
+                <div className="flex justify-end">
+                  <button type="submit" className="control-button-secondary w-full sm:w-auto" disabled={latestProposal.status === "Approved"}>Approve proposal</button>
+                </div>
+              </form>
+            </div>
+          ) : null}
 
           {latestProposal?.status === "Approved" ? (
+            <div id="feature-execution">
             <SectionCard eyebrow="Execution" title="Controlled build run">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="max-w-3xl">
@@ -983,62 +1351,16 @@ export default async function FeaturesPage({ params, searchParams }: FeaturesPag
                 <div className="callout-info mt-4">This approved proposal is ready to enter controlled execution.</div>
               )}
             </SectionCard>
+            </div>
           ) : null}
         </>
-      ) : null}
-
-      <SectionCard eyebrow="Inventory" title={`${features.length} tracked feature topic${features.length === 1 ? "" : "s"}`}>
-        {features.length > 0 ? (
-          <div className="space-y-3">
-            {features.map((feature) => {
-              const selected = feature.id === selectedFeature?.id;
-
-              return (
-                <Link
-                  key={feature.id}
-                  href={`/projects/${project.id}/features?feature=${feature.id}`}
-                  className={`surface-item block p-4 sm:p-5 transition ${
-                    selected
-                      ? "border-[rgba(50,95,155,0.28)] bg-[rgba(50,95,155,0.06)] shadow-[0_14px_34px_rgba(50,95,155,0.08)]"
-                      : "hover:border-[rgba(50,95,155,0.18)] hover:bg-white"
-                  }`}
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-base font-semibold text-[var(--ink-950)]">{feature.canonicalName}</p>
-                        {selected ? <StatusBadge label="Open below" tone="info" /> : null}
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{feature.summary}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <StatusBadge label={feature.status} tone={getFeatureStatusTone(feature.status)} />
-                      <StatusBadge label={feature.priority} tone={feature.priority === "High" ? "warning" : feature.priority === "Medium" ? "info" : "neutral"} />
-                      <StatusBadge label={`${feature.confidence} confidence`} tone={feature.confidence === "High" ? "success" : feature.confidence === "Medium" ? "info" : "warning"} />
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <StatusBadge label={formatSourceLabel(feature.discoverySource)} tone="neutral" />
-                    {feature.latestSourceStudyRunId ? <StatusBadge label="Repo 1 studied" tone="success" /> : <StatusBadge label="Repo 1 not studied" tone="warning" />}
-                    {feature.latestTargetStudyRunId ? <StatusBadge label="Repo 2 studied" tone="success" /> : <StatusBadge label="Repo 2 not studied" tone="warning" />}
-                    {feature.latestMappingSummaryId ? <StatusBadge label="Mapping ready" tone="success" /> : <StatusBadge label="Mapping pending" tone="neutral" />}
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                    {feature.tags.length > 0 ? (
-                      <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{feature.tags.join(" • ")}</p>
-                    ) : <span />}
-                    <span className="text-sm font-medium text-[var(--signal-blue)]">Open study workspace</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="callout-info">
-            No feature topics have been recorded yet. Run Repo 1 study first, then refresh discovery, or add a manual topic to start focused study.
-          </div>
-        )}
-      </SectionCard>
+          ) : (
+            <SectionCard eyebrow="Workspace" title="Select a feature to begin">
+              <p>Select a feature from the inventory to open its dedicated drill-down workspace.</p>
+            </SectionCard>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

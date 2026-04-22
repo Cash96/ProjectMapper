@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { ResetIntelligenceButton } from "@/components/reset-intelligence-button";
 import { SectionCard } from "@/components/section-card";
 import { StatusBadge } from "@/components/status-badge";
+import { NextActionCard, StepRail } from "@/components/workflow-primitives";
 import { listFeatureInventory, listFeatureMappingSummaries } from "@/lib/feature-store";
 import { getProject } from "@/lib/project-helpers";
 import { getRepositoryStudyOrdinal, getRepositoryStudySnapshot } from "@/lib/repo-study";
@@ -32,6 +33,77 @@ function formatTimestamp(value: string | null) {
   });
 }
 
+function getNextAction(input: {
+  projectId: string;
+  repoStates: Array<{ name: string; studied: boolean }>;
+  featureCount: number;
+  studiedFeatureCount: number;
+  mappingCount: number;
+  doctrineState: string;
+}) {
+  const unstagedRepos = input.repoStates.filter((state) => !state.studied);
+
+  if (unstagedRepos.length > 0) {
+    return {
+      eyebrow: "Immediate next move",
+      title: "Complete repository understanding",
+      description: `Run and review ${unstagedRepos.map((state) => state.name).join(" and ")} so the migration has grounded source and target context before feature decisions start.`,
+      action: { label: "Open Understanding", href: `/projects/${input.projectId}/understanding` },
+      badges: [
+        { label: `${unstagedRepos.length} repo${unstagedRepos.length === 1 ? "" : "s"} pending`, tone: "warning" as const },
+      ],
+    };
+  }
+
+  if (input.featureCount === 0) {
+    return {
+      eyebrow: "Immediate next move",
+      title: "Create the migration inventory",
+      description: "Refresh feature discovery from Repo 1 or add a manual topic so migration work can move from repo understanding into feature-sized units.",
+      action: { label: "Open Features", href: `/projects/${input.projectId}/features` },
+      badges: [{ label: "Inventory empty", tone: "warning" as const }],
+    };
+  }
+
+  if (input.studiedFeatureCount < input.featureCount) {
+    return {
+      eyebrow: "Immediate next move",
+      title: "Finish studying priority features",
+      description: "The inventory exists, but not every migration unit has enough Repo 1 and Repo 2 context to compare and propose implementation direction.",
+      action: { label: "Continue Feature Work", href: `/projects/${input.projectId}/features` },
+      badges: [{ label: `${input.studiedFeatureCount}/${input.featureCount} studied`, tone: "info" as const }],
+    };
+  }
+
+  if (input.mappingCount < input.featureCount) {
+    return {
+      eyebrow: "Immediate next move",
+      title: "Turn studies into mappings",
+      description: "Refresh source-target mappings so the system can distinguish what already exists, what is partial, and what still needs to be designed in Repo 2.",
+      action: { label: "Open Feature Mappings", href: `/projects/${input.projectId}/features` },
+      badges: [{ label: `${input.mappingCount}/${input.featureCount} mapped`, tone: "info" as const }],
+    };
+  }
+
+  if (input.doctrineState !== "Approved") {
+    return {
+      eyebrow: "Immediate next move",
+      title: "Approve the governing doctrine",
+      description: "Before proposals become stable build boundaries, the project still needs approved Repo 2 doctrine to define architectural and product rules.",
+      action: { label: "Open Doctrine", href: `/projects/${input.projectId}/understanding` },
+      badges: [{ label: input.doctrineState, tone: "warning" as const }],
+    };
+  }
+
+  return {
+    eyebrow: "Immediate next move",
+    title: "Generate or review implementation proposals",
+    description: "Core migration context is in place. The highest-value action now is refining feature proposals and, once approved, moving them into controlled execution.",
+    action: { label: "Open Features", href: `/projects/${input.projectId}/features` },
+    badges: [{ label: "Ready for proposals", tone: "success" as const }],
+  };
+}
+
 export default async function ProjectDetailPage({ params, searchParams }: ProjectPageProps) {
   const { projectId } = await params;
   const query = await searchParams;
@@ -42,6 +114,19 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     listFeatureMappingSummaries(projectId),
   ]);
   const studiedFeatures = features.filter((feature) => feature.latestSourceStudyRunId || feature.latestTargetStudyRunId).length;
+  const repoStates = project.repositories.map((repository, index) => ({
+    repository,
+    snapshot: studySnapshots[index],
+    studied: Boolean(studySnapshots[index]?.lastStudiedAt),
+  }));
+  const nextAction = getNextAction({
+    projectId,
+    repoStates: repoStates.map((entry) => ({ name: entry.repository.role === "Source" ? "Repo 1" : "Repo 2", studied: entry.studied })),
+    featureCount: features.length,
+    studiedFeatureCount: studiedFeatures,
+    mappingCount: mappings.length,
+    doctrineState: project.doctrine.approvalState,
+  });
   const error = getSearchValue(query.error);
   const reset = getSearchValue(query.reset);
   const feedbackMessage = error
@@ -55,10 +140,10 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
       <PageHeader
         eyebrow="Home"
         title={project.name}
-        description="System state, next actions, and reset control from a single entry point."
+        description="Next step first."
         status={project.status}
         actions={[
-          { label: "Understanding", href: `/projects/${project.id}/understanding` },
+          { label: "System Knowledge", href: `/projects/${project.id}/understanding` },
           { label: "Features", href: `/projects/${project.id}/features` },
         ]}
       />
@@ -67,49 +152,65 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
         <div className={error ? "callout-danger" : "callout-info"}>{feedbackMessage}</div>
       ) : null}
 
-      <SectionCard eyebrow="System state" title="At a glance">
-        <p>{project.mission}</p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="surface-item p-4">
-            <p className="section-label text-[var(--ink-500)]">Features discovered</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-[var(--ink-950)]">{features.length}</p>
-          </div>
-          <div className="surface-item p-4">
-            <p className="section-label text-[var(--ink-500)]">Features studied</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-[var(--ink-950)]">{studiedFeatures}</p>
-          </div>
-          <div className="surface-item p-4">
-            <p className="section-label text-[var(--ink-500)]">Mappings available</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-[var(--ink-950)]">{mappings.length}</p>
-          </div>
-          <div className="surface-item p-4">
-            <p className="section-label text-[var(--ink-500)]">Operator</p>
-            <p className="mt-2 text-lg font-semibold tracking-tight text-[var(--ink-950)]">{project.operator}</p>
-          </div>
-        </div>
+      <NextActionCard
+        eyebrow="Next Step"
+        title={nextAction.title}
+        description={nextAction.badges[0]?.label ?? nextAction.description}
+        action={nextAction.action}
+        badges={nextAction.badges}
+      />
+
+      <SectionCard eyebrow="Progress" title="Current stage">
+          <StepRail
+            steps={[
+              {
+                number: 1,
+                title: "Repo knowledge",
+                description: repoStates.every((entry) => entry.studied) ? "Done" : "In progress",
+                state: repoStates.every((entry) => entry.studied) ? "complete" : "current",
+              },
+              {
+                number: 2,
+                title: "Features",
+                description: `${features.length} found`,
+                state: features.length > 0 ? "complete" : repoStates.every((entry) => entry.studied) ? "current" : "upcoming",
+              },
+              {
+                number: 3,
+                title: "Compare + rules",
+                description: `${mappings.length} ready`,
+                state: mappings.length > 0 && project.doctrine.approvalState === "Approved"
+                  ? "complete"
+                  : features.length > 0
+                    ? "current"
+                    : "upcoming",
+              },
+              {
+                number: 4,
+                title: "Proposal",
+                description: project.doctrine.approvalState === "Approved" ? "Ready" : "Waiting on rules",
+                state: mappings.length > 0 && project.doctrine.approvalState === "Approved" ? "current" : "upcoming",
+              },
+            ]}
+          />
       </SectionCard>
 
-      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <SectionCard eyebrow="Repositories" title="Study status">
+      <SectionCard eyebrow="Repos" title="Status">
           <div className="space-y-4">
-            {project.repositories.map((repository, index) => {
-              const snapshot = studySnapshots[index];
+            {repoStates.map(({ repository, snapshot }) => {
 
               return (
-                <article key={repository.id} className="surface-item p-4 sm:p-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <article key={repository.id} className="selection-card">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="section-label text-[var(--ink-500)]">{getRepositoryStudyOrdinal(repository)}</p>
-                      <p className="mt-2 text-lg font-semibold text-[var(--ink-950)]">{repository.name}</p>
-                      <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{repository.notes}</p>
+                      <p className="text-base font-semibold text-[var(--ink-950)]">{getRepositoryStudyOrdinal(repository)}</p>
                     </div>
                     <StatusBadge label={snapshot.statusLabel} tone={snapshot.statusTone} />
                   </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <StatusBadge label={snapshot.latestVersionLabel === "None" ? "No study yet" : `Latest ${snapshot.latestVersionLabel}`} tone="info" />
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <StatusBadge label={snapshot.latestVersionLabel === "None" ? "Not started" : snapshot.latestVersionLabel} tone="info" />
                     <StatusBadge label={snapshot.stale ? "Stale" : "Fresh"} tone={snapshot.stale ? "warning" : "success"} />
-                    <StatusBadge label={`Last study ${formatTimestamp(snapshot.lastStudiedAt)}`} tone="neutral" />
                   </div>
 
                   <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
@@ -119,47 +220,27 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
                       </button>
                     </form>
                     <Link href={`/projects/${project.id}/understanding`} className="control-button-secondary">
-                      View understanding
+                      Open System Knowledge
                     </Link>
                   </div>
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">View details</summary>
+                    <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">{repository.notes}</p>
+                    <p className="mt-2 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">Last study {formatTimestamp(snapshot.lastStudiedAt)}</p>
+                  </details>
                 </article>
               );
             })}
           </div>
-        </SectionCard>
-
-        <SectionCard eyebrow="Actions" title="Next steps">
-          <div className="space-y-4">
-            <div className="surface-item p-4 sm:p-5">
-              <p className="font-medium text-[var(--ink-950)]">Move to understanding</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">Read the combined Repo 1 and Repo 2 intelligence, AI questions, and guidance history.</p>
-              <Link href={`/projects/${project.id}/understanding`} className="control-button-secondary mt-4 inline-flex">Open Understanding</Link>
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">Optional actions</summary>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href={`/projects/${project.id}/understanding`} className="control-button-secondary inline-flex">
+                Open Rules
+              </Link>
+              <ResetIntelligenceButton action={`/api/projects/${project.id}/intelligence/reset`} />
             </div>
-
-            <div className="surface-item p-4 sm:p-5">
-              <p className="font-medium text-[var(--ink-950)]">Start feature work</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">Discover topics from Repo 1 or continue focused feature studies and mappings.</p>
-              <Link href={`/projects/${project.id}/features`} className="control-button-secondary mt-4 inline-flex">Open Features</Link>
-            </div>
-
-            <div className="surface-item p-4 sm:p-5">
-              <p className="font-medium text-[var(--ink-950)]">Reset intelligence</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">Wipe all studies, features, mappings, doctrine versions, reports, and AI outputs while preserving this project and its repo connections.</p>
-              <div className="mt-4">
-                <ResetIntelligenceButton action={`/api/projects/${project.id}/intelligence/reset`} />
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-      </div>
-
-      <SectionCard eyebrow="Doctrine" title="Current grounding state">
-        <p>{project.doctrine.summary}</p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <StatusBadge label={project.doctrine.approvalState} tone={project.doctrine.approvalState === "Approved" ? "success" : project.doctrine.approvalState === "Awaiting Approval" ? "warning" : "neutral"} />
-          <StatusBadge label={project.doctrine.version} tone="info" />
-          <StatusBadge label={`Updated ${project.doctrine.lastUpdatedAt}`} tone="neutral" />
-        </div>
+          </details>
       </SectionCard>
     </div>
   );

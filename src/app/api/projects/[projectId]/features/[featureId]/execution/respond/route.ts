@@ -27,7 +27,7 @@ export async function POST(
 
   if (!executionRunId || responses.length === 0) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: "At least one execution question response is required before continuing.",
       })),
@@ -43,7 +43,7 @@ export async function POST(
     });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         execution: run.status === "Blocked" ? "blocked" : run.status === "AwaitingReview" ? "awaiting-review" : "continued",
         executionRunId: run.id,
@@ -52,7 +52,7 @@ export async function POST(
     );
   } catch (error) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: error instanceof Error ? error.message : "Execution could not continue.",
       })),

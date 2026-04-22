@@ -20,7 +20,7 @@ export async function POST(
 
   if (!executionRunId) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: "Execution run not found.",
       })),
@@ -32,7 +32,7 @@ export async function POST(
     await abortExecutionRun(executionRunId);
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         execution: "aborted",
       })),
@@ -40,7 +40,7 @@ export async function POST(
     );
   } catch (error) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: error instanceof Error ? error.message : "Execution could not be aborted.",
       })),

@@ -18,6 +18,24 @@ function sanitize<T extends { _id?: unknown }>(value: T) {
   return structuredClone(rest);
 }
 
+function normalizeExecutionRun(record: ExecutionRun): ExecutionRun {
+  return {
+    ...record,
+    investigationStatus: record.investigationStatus ?? "NotStarted",
+    progressLog: record.progressLog ?? [],
+    investigationActions: record.investigationActions ?? [],
+    decisionRecords: record.decisionRecords ?? [],
+    agentMessages: record.agentMessages ?? [],
+    agentReviews: record.agentReviews ?? [],
+    changedFilesSummary: record.changedFilesSummary ?? [],
+    commitsSummary: record.commitsSummary ?? [],
+    testResults: record.testResults ?? [],
+    risksIdentified: record.risksIdentified ?? [],
+    assumptionsLogged: record.assumptionsLogged ?? [],
+    unresolvedQuestions: record.unresolvedQuestions ?? [],
+  };
+}
+
 function getExecutionStore() {
   if (!global.__projectMapperExecutionRuns) {
     global.__projectMapperExecutionRuns = new Map();
@@ -43,12 +61,12 @@ export async function listExecutionRuns(projectId: string, featureId?: string) {
       .sort({ startedAt: -1 })
       .toArray();
 
-    return records.map(sanitize);
+    return records.map((record) => normalizeExecutionRun(sanitize(record)));
   }
 
   const records = getExecutionStore().get(getProjectKey(projectId)) ?? [];
   const filtered = featureId ? records.filter((entry) => entry.featureId === featureId) : records;
-  return structuredClone(filtered.slice().sort((left, right) => right.startedAt.localeCompare(left.startedAt)));
+  return structuredClone(filtered.slice().sort((left, right) => right.startedAt.localeCompare(left.startedAt))).map(normalizeExecutionRun);
 }
 
 export async function getLatestExecutionRun(projectId: string, featureId: string) {
@@ -60,14 +78,14 @@ export async function readExecutionRun(executionRunId: string) {
   if (isMongoConfigured()) {
     const collection = await getExecutionRunCollection();
     const record = await collection.findOne({ id: executionRunId });
-    return record ? sanitize(record) : null;
+    return record ? normalizeExecutionRun(sanitize(record)) : null;
   }
 
   for (const records of getExecutionStore().values()) {
     const record = records.find((entry) => entry.id === executionRunId);
 
     if (record) {
-      return structuredClone(record);
+      return normalizeExecutionRun(structuredClone(record));
     }
   }
 
@@ -75,20 +93,22 @@ export async function readExecutionRun(executionRunId: string) {
 }
 
 export async function upsertExecutionRun(record: ExecutionRun) {
+  const normalizedRecord = normalizeExecutionRun(record);
+
   if (isMongoConfigured()) {
     const collection = await getExecutionRunCollection();
-    await collection.replaceOne({ id: record.id }, record, { upsert: true });
-    return record;
+    await collection.replaceOne({ id: normalizedRecord.id }, normalizedRecord, { upsert: true });
+    return normalizedRecord;
   }
 
-  const key = getProjectKey(record.projectId);
+  const key = getProjectKey(normalizedRecord.projectId);
   const records = getExecutionStore().get(key) ?? [];
-  const nextRecords = records.some((entry) => entry.id === record.id)
-    ? records.map((entry) => (entry.id === record.id ? structuredClone(record) : entry))
-    : [structuredClone(record), ...records];
+  const nextRecords = records.some((entry) => entry.id === normalizedRecord.id)
+    ? records.map((entry) => (entry.id === normalizedRecord.id ? structuredClone(normalizedRecord) : entry))
+    : [structuredClone(normalizedRecord), ...records];
 
   getExecutionStore().set(key, nextRecords);
-  return record;
+  return normalizedRecord;
 }
 
 export async function updateExecutionRun(

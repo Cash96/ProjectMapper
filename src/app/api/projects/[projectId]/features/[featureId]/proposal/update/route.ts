@@ -5,6 +5,28 @@ import { parseTextareaList, updateFeatureProposalDraft } from "@/lib/feature-pro
 import { readFeatureProposal } from "@/lib/proposal-store";
 import { getOperatorSession, getRedirectUrl } from "@/lib/request-utils";
 
+function buildOperatorResponsesFromFormData(formData: FormData) {
+  const structuredResponses = [...formData.entries()]
+    .filter(([key, value]) => key.startsWith("operatorResponse__") && typeof value === "string" && value.trim().length > 0)
+    .map(([key, value]) => {
+      const question = key.split("__").slice(2).join(" ").replace(/-/g, " ").trim();
+      const rawQuestion = String(formData.get(`${key}__question`) ?? "").trim();
+
+      return {
+        question: rawQuestion || question,
+        answer: String(value).trim(),
+      };
+    })
+    .filter((entry) => entry.question.length > 0);
+
+  const structuredText = structuredResponses
+    .map((entry) => `Q: ${entry.question}\nA: ${entry.answer}`)
+    .join("\n\n");
+  const generalText = String(formData.get("operatorResponsesGeneral") ?? formData.get("operatorResponses") ?? "").trim();
+
+  return [structuredText, generalText].filter(Boolean).join("\n\n");
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; featureId: string }> },
@@ -25,7 +47,7 @@ export async function POST(
       error: "A proposal must exist before it can be updated.",
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }
@@ -38,7 +60,7 @@ export async function POST(
       error: "The requested proposal could not be found.",
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }
@@ -47,7 +69,7 @@ export async function POST(
     proposalId,
     editedBy: session.username,
     operatorComments: String(formData.get("operatorComments") ?? "").trim(),
-    operatorResponses: String(formData.get("operatorResponses") ?? "").trim(),
+    operatorResponses: buildOperatorResponsesFromFormData(formData),
     operatorNotes: String(formData.get("operatorNotes") ?? "").trim(),
     productDirectionDecisions: String(formData.get("productDirectionDecisions") ?? "").trim(),
     constraintsNonNegotiables: String(formData.get("constraintsNonNegotiables") ?? "").trim(),
@@ -70,11 +92,12 @@ export async function POST(
 
   const searchParams = new URLSearchParams({
     feature: featureId,
+    step: "5",
     proposal: "saved",
     proposalVersion: String(proposal.version),
   });
 
-  return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+  return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
     status: 303,
   });
 }

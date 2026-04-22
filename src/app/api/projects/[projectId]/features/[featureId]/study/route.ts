@@ -33,7 +33,7 @@ export async function POST(
       feature: featureId,
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }
@@ -54,7 +54,7 @@ export async function POST(
       feature: featureId,
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   } catch (error) {
@@ -63,7 +63,7 @@ export async function POST(
       feature: featureId,
     });
 
-    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    return NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
   }

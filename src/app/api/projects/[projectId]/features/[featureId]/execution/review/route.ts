@@ -21,7 +21,7 @@ export async function POST(
 
   if (!executionRunId || (decision !== "Approved" && decision !== "Rejected")) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: "A valid execution review decision is required.",
       })),
@@ -33,7 +33,7 @@ export async function POST(
     await reviewExecutionRun({ executionRunId, decision });
 
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         execution: decision === "Approved" ? "approved" : "rejected",
       })),
@@ -41,7 +41,7 @@ export async function POST(
     );
   } catch (error) {
     return NextResponse.redirect(
-      getRedirectUrl(request, `/projects/${projectId}/features`, new URLSearchParams({
+      getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, new URLSearchParams({
         feature: featureId,
         error: error instanceof Error ? error.message : "Execution review could not be saved.",
       })),

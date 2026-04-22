@@ -28,7 +28,7 @@ export async function POST(
   const guidance = String(formData.get("guidance") ?? "").trim();
   const repositoryRole = String(formData.get("repositoryRole") ?? "").trim();
   const redirectToFeatures = (searchParams: URLSearchParams) =>
-    NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features`, searchParams), {
+    NextResponse.redirect(getRedirectUrl(request, `/projects/${projectId}/features/${featureId}`, searchParams), {
       status: 303,
     });
 
