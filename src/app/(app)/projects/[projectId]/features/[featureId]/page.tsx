@@ -5,7 +5,8 @@ import { DeleteFeatureButton } from "@/components/delete-feature-button";
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
 import { StatusBadge } from "@/components/status-badge";
-import { FieldShell, NextActionCard, StepRail } from "@/components/workflow-primitives";
+import { FieldShell, StepRail, StickyNextActionBar, WorkflowHero } from "@/components/workflow-primitives";
+import { buildCanonicalWorkflowSteps, countCompletedWorkflowSteps, getCanonicalWorkflowStep, type CanonicalWorkflowStepNumber } from "@/lib/canonical-workflow";
 import { getLatestExecutionRun } from "@/lib/execution-store";
 import { getFeatureStatusTone } from "@/lib/feature-intelligence";
 import { buildEditableProposalContent, getFeatureProposalReadiness } from "@/lib/feature-proposals";
@@ -78,8 +79,8 @@ function getProposalCheckAction(input: {
 }) {
   if (input.checkLabel === "Current mapping") {
     return {
-      label: "Go to mapping",
-      href: buildFeatureHref(input.projectId, input.featureId, { repositoryRole: input.repositoryRole, step: 3 }),
+      label: "Review proposal inputs",
+      href: buildFeatureHref(input.projectId, input.featureId, { repositoryRole: input.repositoryRole, step: 5 }),
     };
   }
 
@@ -411,21 +412,13 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
   const targetStudyComplete = targetRun?.status === "Complete";
   const hasBothStudies = Boolean(sourceStudyComplete && targetStudyComplete);
   const requestedRepositoryRole = getSearchValue(query.repositoryRole) ?? getSearchValue(query.role);
-  const requestedStep = Number.parseInt(getSearchValue(query.step) ?? "", 10);
-  const currentStep = !sourceStudyComplete ? 1 : !targetStudyComplete ? 2 : !mapping ? 3 : !latestProposal ? 4 : 5;
-  const defaultStep = requestedRepositoryRole === "Source" ? 1 : requestedRepositoryRole === "Target" ? 2 : currentStep;
-  const activeStep = [1, 2, 3, 4, 5].includes(requestedStep) ? requestedStep : defaultStep;
-  const selectedRepositoryRole = activeStep === 2
-    ? "Target"
-    : activeStep === 1
+  const selectedRepositoryRole = isRepositoryRole(requestedRepositoryRole)
+    ? requestedRepositoryRole
+    : !sourceStudyComplete
       ? "Source"
-      : isRepositoryRole(requestedRepositoryRole)
-        ? requestedRepositoryRole
-        : !sourceStudyComplete
-          ? "Source"
-          : !targetStudyComplete
-            ? "Target"
-            : "Source";
+      : !targetStudyComplete
+        ? "Target"
+        : "Source";
   const selectedStudy = selectedRepositoryRole === "Source"
     ? { role: "Source" as const, latestRun: sourceRun, recentRuns: sourceRecentRuns }
     : { role: "Target" as const, latestRun: targetRun, recentRuns: targetRecentRuns };
@@ -448,6 +441,10 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
   const proposalApproved = latestProposal?.status === "Approved";
   const executionWorkspaceActive = isExecutionWorkspaceActive(latestExecutionRun?.status);
   const executionNeedsOperatorInput = latestExecutionRun?.status === "Blocked" && openExecutionMessages.length > 0;
+  const proposalQuestionsResolved = reviewQuestions.length === 0 || answeredReviewQuestionCount === reviewQuestions.length;
+  const reviewReady = latestExecutionRun?.status === "AwaitingReview" || latestExecutionRun?.status === "Completed";
+  const reviewComplete = latestExecutionRun?.operatorReviewStatus === "Approved" || latestExecutionRun?.status === "Completed";
+  const executionStarted = Boolean(latestExecutionRun && latestExecutionRun.status !== "NotStarted");
   const showProposalReviewWorkspace = Boolean(latestProposal && latestProposal.status !== "Approved");
   const showApprovedExecutionSummary = Boolean(proposalApproved);
   const executionQuestionsTitle = latestExecutionRun?.status === "Aborted"
@@ -464,96 +461,156 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
   );
   const canStartExecution = latestProposal?.status === "Approved"
     && (!latestExecutionRun || ["Completed", "Aborted"].includes(latestExecutionRun.status));
-  const featureNextAction = !sourceStudyComplete
+  const activeStep: CanonicalWorkflowStepNumber = !latestProposal
+    ? 5
+    : latestProposal.status !== "Approved"
+      ? proposalQuestionsResolved ? 7 : 6
+      : executionNeedsOperatorInput
+        ? 9
+        : reviewReady
+          ? 10
+          : 8;
+  const featureNextAction = activeStep === 5
     ? {
-        eyebrow: "Immediate next move",
-        title: "Run Repo 1 feature study",
-        description: "Start with the source implementation so the migration unit has real behavioral grounding before target analysis begins.",
-        action: { label: "Study Repo 1", href: buildFeatureHref(project.id, feature.id, { repositoryRole: "Source", step: 1 }) },
-        badges: [{ label: "Step 1", tone: "info" as const }],
+        title: latestProposal ? "Refine the proposal inputs" : "Build the proposal boundary",
+        description: proposalReadiness?.ready
+          ? "Generate the implementation proposal for this selected feature."
+          : "Proposal work is blocked until the feature studies, mapping, and doctrine inputs are in place.",
+        action: undefined,
       }
-    : !targetStudyComplete
+    : activeStep === 6
       ? {
-          eyebrow: "Immediate next move",
-          title: "Run Repo 2 feature study",
-          description: "Use the source understanding to inspect whether the target already has an analog, partial implementation, or gap.",
-          action: { label: "Study Repo 2", href: buildFeatureHref(project.id, feature.id, { repositoryRole: "Target", step: 2 }) },
-          badges: [{ label: "Step 2", tone: "info" as const }],
+          title: "Answer the proposal questions",
+          description: "Only settle the open design questions that materially change the next proposal draft.",
+          action: undefined,
         }
-      : !mapping
+      : activeStep === 7
         ? {
-            eyebrow: "Immediate next move",
-            title: "Refresh the mapping",
-            description: "Now that both studies exist, compare them to establish what is missing, partial, or already present in Repo 2.",
-            action: { label: "Open mapping", href: buildFeatureHref(project.id, feature.id, { step: 3 }) },
-            badges: [{ label: "Step 3", tone: "info" as const }],
+            title: "Approve or reject the proposal boundary",
+            description: "Once the draft is clear enough, turn it into the approved execution boundary or request another revision.",
+            action: undefined,
           }
-        : !latestProposal
+        : activeStep === 8
           ? {
-              eyebrow: "Immediate next move",
-              title: "Generate the proposal boundary",
-              description: "Use study output, mapping, and doctrine to define the implementation direction before any execution starts.",
-              action: { label: "Open proposal", href: buildFeatureHref(project.id, feature.id, { step: 4 }) },
-              badges: [{ label: "Step 4", tone: "info" as const }],
+              title: canStartExecution ? "Start controlled execution" : "Inspect the active build run",
+              description: canStartExecution
+                ? "The proposal is approved. Start execution only from this boundary."
+                : "Execution is already in motion. Stay inside the build workspace until it pauses or reaches review.",
+              action: undefined,
             }
-          : latestProposal.status !== "Approved"
+          : activeStep === 9
             ? {
-                eyebrow: "Immediate next move",
-                title: "Refine and approve the proposal",
-                description: "Use review notes and co-design inputs to tighten the proposal until it becomes the approved execution boundary.",
-                action: { label: "Open review", href: buildFeatureHref(project.id, feature.id, { step: 5 }) },
-                badges: [{ label: latestProposal.status, tone: getProposalStatusTone(latestProposal.status) }],
+                title: "Resolve the deep execution questions",
+                description: "These are the only execution decisions the agent could not safely close through investigation.",
+                action: undefined,
               }
-            : canStartExecution
-              ? {
-                  eyebrow: "Immediate next move",
-                  title: "Start controlled execution",
-                  description: "The proposal is approved. The feature is ready to move into branch-based, proposal-bound execution.",
-                  action: { label: "Open execution", href: buildFeatureHref(project.id, feature.id, { step: 5 }) },
-                  badges: [{ label: "Ready", tone: "success" as const }],
-                }
-              : {
-                  eyebrow: "Execution state",
-                  title: "Review the active build run",
-                  description: "Execution is already in progress or awaiting review. Use the execution workspace to inspect logs, questions, and review output.",
-                  action: { label: "Open execution", href: buildFeatureHref(project.id, feature.id, { step: 5 }) },
-                  badges: latestExecutionRun ? [{ label: latestExecutionRun.status, tone: getExecutionStatusTone(latestExecutionRun.status) }] : [],
-                };
-  const workflowSteps: Parameters<typeof StepRail>[0]["steps"] = [
+            : {
+                title: "Complete the human review",
+                description: "Review the execution result and close the feature only after human approval.",
+                action: undefined,
+              };
+  const workflowSteps = buildCanonicalWorkflowSteps({
+    activeStep,
+    stateByStep: {
+      1: "complete",
+      2: "complete",
+      3: "complete",
+      4: "complete",
+      5: latestProposal ? "complete" : proposalReadiness?.ready ? "in-progress" : "blocked",
+      6: latestProposal ? (latestProposal.status === "Approved" || proposalQuestionsResolved ? "complete" : "in-progress") : "not-started",
+      7: latestProposal ? (latestProposal.status === "Approved" ? "complete" : proposalQuestionsResolved ? "ready" : "not-started") : "not-started",
+      8: proposalApproved ? (executionStarted ? (executionNeedsOperatorInput || reviewReady || reviewComplete ? "complete" : "in-progress") : "ready") : "not-started",
+      9: proposalApproved ? (executionNeedsOperatorInput ? "blocked" : reviewReady || reviewComplete ? "complete" : executionStarted ? "ready" : "not-started") : "not-started",
+      10: proposalApproved ? (reviewComplete ? "complete" : reviewReady ? "in-progress" : "not-started") : "not-started",
+    },
+    descriptionByStep: {
+      4: `Selected feature: ${feature.canonicalName}.`,
+      5: latestProposal
+        ? "A proposal draft already exists for this feature."
+        : proposalReadiness?.ready
+          ? "Generate the proposal from the current feature evidence, mapping, and doctrine."
+          : "Proposal work stays blocked until the supporting evidence is complete.",
+      6: latestProposal
+        ? proposalQuestionsResolved
+          ? "The proposal questions are already settled."
+          : `${reviewQuestions.length - answeredReviewQuestionCount} proposal question${reviewQuestions.length - answeredReviewQuestionCount === 1 ? "" : "s"} still need answers.`
+        : "Proposal questions do not open until a draft exists.",
+      7: latestProposal
+        ? latestProposal.status === "Approved"
+          ? "The proposal boundary is already approved."
+          : "Use approval or revision request to close the proposal boundary."
+        : "Proposal agreement stays blocked until there is a draft to review.",
+      8: proposalApproved
+        ? canStartExecution
+          ? "The approved proposal is ready to enter controlled execution."
+          : "Execution is already in progress or has reached a later stage."
+        : "Execution stays blocked until the proposal is approved.",
+      9: executionNeedsOperatorInput
+        ? `${openExecutionMessages.length} deep execution decision${openExecutionMessages.length === 1 ? " is" : "s are"} waiting for operator input.`
+        : "No deep execution questions are currently open.",
+      10: reviewComplete
+        ? "Human review is complete for this feature."
+        : reviewReady
+          ? "The run is waiting for final human review."
+          : "Review does not begin until execution has produced a result to inspect.",
+    },
+    badgesByStep: {
+      4: [{ label: feature.status, tone: getFeatureStatusTone(feature.status) }],
+      5: latestProposal ? [{ label: latestProposal.status, tone: getProposalStatusTone(latestProposal.status) }] : undefined,
+      8: latestExecutionRun ? [{ label: latestExecutionRun.status, tone: getExecutionStatusTone(latestExecutionRun.status) }] : undefined,
+      9: latestExecutionRun ? [{ label: `${openExecutionMessages.length} open`, tone: openExecutionMessages.length > 0 ? "warning" as const : "neutral" as const }] : undefined,
+      10: latestExecutionRun ? [{ label: latestExecutionRun.operatorReviewStatus, tone: latestExecutionRun.operatorReviewStatus === "Approved" ? "success" as const : latestExecutionRun.operatorReviewStatus === "Rejected" ? "danger" as const : "info" as const }] : undefined,
+    },
+  });
+  const activeWorkflowStep = getCanonicalWorkflowStep(activeStep);
+  const completedWorkflowSteps = countCompletedWorkflowSteps(workflowSteps);
+  const featureTrack = [
     {
-      number: 1,
-      title: "Repo 1 study",
-      description: "Capture source behavior, workflows, and implementation touchpoints.",
-      state: sourceStudyComplete ? "complete" : activeStep === 1 ? "current" : "upcoming",
-      badges: [{ label: sourceRun?.status ?? "Not studied", tone: sourceStudyComplete ? "success" : sourceRun ? "info" : "neutral" }],
+      label: "Repo 1 feature study",
+      title: sourceRun?.status === "Complete" ? "Repo 1 is grounded" : "Study Repo 1 behavior",
+      summary: sourceRun?.understanding?.summary ?? "Understand how this feature behaves in the source system.",
+      badges: [
+        { label: sourceRun?.status ?? "Not studied", tone: sourceRun?.status === "Complete" ? "success" as const : sourceRun ? "info" as const : "warning" as const },
+      ],
+      primary: activeStep === 5 && selectedRepositoryRole === "Source" && !sourceStudyComplete,
     },
     {
-      number: 2,
-      title: "Repo 2 study",
-      description: "Inspect target reality and likely landing zones for the migration.",
-      state: targetStudyComplete ? "complete" : activeStep === 2 ? "current" : "upcoming",
-      badges: [{ label: targetRun?.status ?? "Not studied", tone: targetStudyComplete ? "success" : targetRun ? "info" : "neutral" }],
+      label: "Repo 2 feature study",
+      title: targetRun?.status === "Complete" ? "Repo 2 landing zone is grounded" : "Study Repo 2 landing zone",
+      summary: targetRun?.understanding?.summary ?? "Find the right landing zone and constraints in the target system.",
+      badges: [
+        { label: targetRun?.status ?? "Not studied", tone: targetRun?.status === "Complete" ? "success" as const : targetRun ? "info" as const : "warning" as const },
+      ],
+      primary: activeStep === 5 && selectedRepositoryRole === "Target" && !targetStudyComplete,
     },
     {
-      number: 3,
-      title: "Mapping",
-      description: "Compare both studies to define what exists, what is partial, and what is missing.",
-      state: mapping ? "complete" : activeStep === 3 ? "current" : "upcoming",
-      badges: [{ label: mapping ? mapping.status : "Not mapped", tone: mapping ? "success" : "neutral" }],
+      label: "Mapping",
+      title: mapping ? "Mapping summary exists" : "Refresh the mapping summary",
+      summary: mapping?.summary ?? "Condense the Repo 1 to Repo 2 migration shape before proposal work begins.",
+      badges: [
+        { label: mapping ? mapping.status : "Not mapped", tone: mapping ? "success" as const : "warning" as const },
+      ],
+      primary: activeStep === 5 && hasBothStudies && !mapping,
     },
     {
-      number: 4,
-      title: "Proposal",
-      description: "Generate the approved implementation direction for the feature.",
-      state: latestProposal ? (activeStep === 4 ? "current" : "complete") : activeStep === 4 ? "current" : "upcoming",
-      badges: latestProposal ? [{ label: latestProposal.status, tone: getProposalStatusTone(latestProposal.status) }] : undefined,
+      label: "Proposal",
+      title: latestProposal ? `Proposal v${latestProposal.version}` : "Build the proposal boundary",
+      summary: editableProposal?.proposalSummary ?? "Turn the grounded evidence into an explicit implementation boundary.",
+      badges: [
+        { label: latestProposal?.status ?? "No proposal", tone: latestProposal ? getProposalStatusTone(latestProposal.status) : "warning" as const },
+      ],
+      primary: activeStep === 5 || activeStep === 6 || activeStep === 7,
     },
     {
-      number: 5,
-      title: "Review / execution",
-      description: "Shape the proposal, approve it, then control execution and review.",
-      state: activeStep === 5 ? "current" : latestProposal ? "upcoming" : "upcoming",
-      badges: latestProposal ? [{ label: latestProposal.status === "Approved" ? "Execution ready" : "Reviewing", tone: latestProposal.status === "Approved" ? "success" : "warning" }] : undefined,
+      label: "Execution + review",
+      title: latestExecutionRun ? `Run is ${latestExecutionRun.status}` : "Execution has not started",
+      summary: latestExecutionRun
+        ? "Stay in this lane until execution either pauses for operator input or reaches final review."
+        : "Execution begins only after the proposal is explicitly approved.",
+      badges: [
+        { label: latestExecutionRun?.status ?? "Not started", tone: latestExecutionRun ? getExecutionStatusTone(latestExecutionRun.status) : "neutral" as const },
+      ],
+      primary: activeStep === 8 || activeStep === 9 || activeStep === 10,
     },
   ];
 
@@ -564,194 +621,155 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
         title={feature.canonicalName}
         description={feature.summary}
         actions={[
-          { label: "All features", href: `/projects/${project.id}/features` },
+          { label: "Features", href: `/projects/${project.id}/features` },
           { label: "Home", href: `/projects/${project.id}` },
         ]}
       />
 
       {feedbackMessage ? <div className={getSearchValue(query.error) ? "callout-danger" : "callout-info"}>{feedbackMessage}</div> : null}
 
-      <div className="grid gap-4 2xl:grid-cols-[0.96fr_1.04fr]">
-        <SectionCard eyebrow="Feature" title={feature.canonicalName}>
-          <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-            <div>
-              <p>{feature.summary}</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <StatusBadge label={feature.status} tone={getFeatureStatusTone(feature.status)} />
-                <StatusBadge label={feature.priority} tone={feature.priority === "High" ? "warning" : feature.priority === "Medium" ? "info" : "neutral"} />
-                <StatusBadge label={`${feature.confidence} confidence`} tone={feature.confidence === "High" ? "success" : feature.confidence === "Medium" ? "info" : "warning"} />
-                <StatusBadge label={`${features.length} tracked features`} tone="neutral" />
-              </div>
-            </div>
-            <div className="surface-item p-4 sm:p-5">
-              <p className="section-label text-[var(--ink-500)]">Evidence and tags</p>
-              <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-700)]">
-                {feature.sourceEvidence.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-              {feature.tags.length > 0 ? <p className="mt-4 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{feature.tags.join(" • ")}</p> : null}
-              <div className="mt-5">
-                <DeleteFeatureButton action={`/api/projects/${project.id}/features/${feature.id}/delete`} featureName={feature.canonicalName} />
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard eyebrow="Workflow" title="Feature progression">
-          <StepRail steps={workflowSteps} />
-        </SectionCard>
-      </div>
-
-      <NextActionCard
-        eyebrow={featureNextAction.eyebrow}
+      <WorkflowHero
+        stepLabel={`Step ${activeWorkflowStep.number}: ${activeWorkflowStep.title}`}
+        progressLabel={`${completedWorkflowSteps} of 10 complete`}
         title={featureNextAction.title}
         description={featureNextAction.description}
-        action={"action" in featureNextAction ? featureNextAction.action : undefined}
-        badges={featureNextAction.badges}
+        state={workflowSteps.find((step) => step.number === activeWorkflowStep.number)?.state ?? "not-started"}
+        badges={[
+          { label: feature.status, tone: getFeatureStatusTone(feature.status) },
+          ...(workflowSteps.find((step) => step.number === activeWorkflowStep.number)?.badges ?? []),
+        ]}
       />
 
-      <SectionCard eyebrow="Focus" title="Active work area">
-        <div className="flex flex-wrap gap-2">
-          {workflowSteps.map((step) => (
-            <Link
-              key={step.number}
-              href={buildFeatureHref(project.id, feature.id, {
-                step: step.number,
-                repositoryRole: step.number === 1 ? "Source" : step.number === 2 ? "Target" : undefined,
-              })}
-              className={`rounded-full border px-4 py-2 text-sm font-medium transition ${activeStep === step.number
-                ? "border-[rgba(50,95,155,0.28)] bg-[rgba(50,95,155,0.08)] text-[var(--ink-950)]"
-                : "border-[rgba(15,23,42,0.12)] bg-white text-[var(--ink-700)] hover:border-[rgba(50,95,155,0.18)] hover:text-[var(--ink-950)]"}`}
-            >
-              Step {step.number}: {step.title}
-            </Link>
+      <StickyNextActionBar
+        stepLabel={`Step ${activeWorkflowStep.number}: ${activeWorkflowStep.title}`}
+        description={featureNextAction.title}
+        action={"action" in featureNextAction ? featureNextAction.action : undefined}
+      />
+
+      <SectionCard eyebrow="Feature track" title="Move this feature straight through the lane">
+        <div className="workflow-stage-list">
+          {featureTrack.map((item) => (
+            <article key={item.label} className={`workflow-stage ${item.primary ? "workflow-stage-primary" : ""}`.trim()}>
+              <p className="section-label">{item.label}</p>
+              <h3 className="mt-1 text-base font-semibold text-[var(--ink-950)]">{item.title}</h3>
+              <p className="workflow-stage-summary">{item.summary}</p>
+              <div className="workflow-stage-meta">
+                {item.badges.map((badge) => (
+                  <StatusBadge key={`${item.label}-${badge.label}`} label={badge.label} tone={badge.tone} />
+                ))}
+              </div>
+            </article>
           ))}
         </div>
       </SectionCard>
 
-      {activeStep === 1 || activeStep === 2 ? (
-        <SectionCard eyebrow={`Step ${activeStep}`} title={`${roleLabel(selectedStudy.role)} study workspace`}>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">View full workflow and feature detail</summary>
+        <div className="mt-4">
+          <SectionCard eyebrow="Workflow" title="Full feature workflow">
+            <div className="space-y-4">
+              <StepRail steps={workflowSteps} />
+              <details>
+                <summary className="cursor-pointer text-sm font-medium text-[var(--ink-700)]">View feature details</summary>
+                <div className="mt-4 space-y-4">
+                  <p>{feature.summary}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge label={feature.priority} tone={feature.priority === "High" ? "warning" : feature.priority === "Medium" ? "info" : "neutral"} />
+                    <StatusBadge label={`${feature.confidence} confidence`} tone={feature.confidence === "High" ? "success" : feature.confidence === "Medium" ? "info" : "warning"} />
+                    <StatusBadge label={`${features.length} tracked features`} tone="neutral" />
+                  </div>
+                  {feature.sourceEvidence.length > 0 ? (
+                    <ul className="space-y-2 text-sm leading-6 text-[var(--ink-700)]">
+                      {feature.sourceEvidence.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {feature.tags.length > 0 ? <p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">{feature.tags.join(" • ")}</p> : null}
+                  <div>
+                    <DeleteFeatureButton action={`/api/projects/${project.id}/features/${feature.id}/delete`} featureName={feature.canonicalName} />
+                  </div>
+                </div>
+              </details>
+            </div>
+          </SectionCard>
+        </div>
+      </details>
+
+      {activeStep === 5 ? (
+        <SectionCard eyebrow="Step 5" title="Build proposal">
           <div className="space-y-4">
             <div className="surface-item p-4 sm:p-5">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="max-w-3xl">
-                  <p>Study this feature in {roleLabel(selectedStudy.role)} to capture real behavior, relevant paths, and migration implications.</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <StatusBadge label={selectedStudy.latestRun?.status ?? "Not studied"} tone={selectedStudy.latestRun?.status === "Complete" ? "success" : selectedStudy.latestRun?.status === "Failed" ? "danger" : selectedStudy.latestRun ? "info" : "neutral"} />
-                    <StatusBadge label={selectedStudy.latestRun ? `Latest v${selectedStudy.latestRun.version}` : "No runs yet"} tone="info" />
-                  </div>
-                </div>
+              <p className="font-medium text-[var(--ink-950)]">Proposal status</p>
+              <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">
+                Build the proposal from grounded feature evidence. The study and mapping work below are supporting inputs, not separate top-level workflow stages.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <StatusBadge label={proposalReadiness?.ready ? "Ready to propose" : "Proposal blocked"} tone={proposalReadiness?.ready ? "success" : "warning"} />
+                <StatusBadge label={latestProposal ? `Proposal v${latestProposal.version}` : "No proposal yet"} tone={latestProposal ? "info" : "neutral"} />
+                <StatusBadge label={proposalReadiness?.doctrineVersion ? `Doctrine v${proposalReadiness.doctrineVersion.version}` : "Doctrine missing"} tone={proposalReadiness?.doctrineVersion ? "info" : "warning"} />
               </div>
-              <form action={`/api/projects/${project.id}/features/${feature.id}/study`} method="post" className="mt-5 space-y-3">
-                <input type="hidden" name="repositoryRole" value={selectedStudy.role} />
-                <FieldShell label={`Guidance for ${roleLabel(selectedStudy.role)}`} hint="Optional. Use this to say the feature is missing in this repo, point to likely analogs, or constrain the next pass.">
-                  <textarea
-                    name="guidance"
-                    rows={4}
-                    className="field-textarea"
-                    placeholder={selectedStudy.role === "Source"
-                      ? "Optional Repo 1 guidance. Use this to narrow the study to a workflow, subsystem, or implementation assumption."
-                      : "Optional Repo 2 guidance. Example: This feature does not exist in Repo 2 today. Focus on analogous areas or where it would most likely live."}
-                  />
-                </FieldShell>
-                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                  <button type="submit" className="control-button-primary w-full sm:w-auto">Study {roleLabel(selectedStudy.role)}</button>
-                  {selectedStudy.latestRun?.status === "Complete" ? (
-                    <button type="submit" name="continueFromRunId" value={selectedStudy.latestRun.id} className="control-button-secondary w-full sm:w-auto">Continue study</button>
-                  ) : null}
-                </div>
-              </form>
             </div>
 
-            {selectedStudy.latestRun?.understanding ? (
-              <>
+            <details className="surface-item p-4 sm:p-5">
+              <summary className="cursor-pointer font-medium text-[var(--ink-950)]">Review proposal inputs</summary>
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
                 <div className="surface-item p-4 sm:p-5">
-                  <p className="font-medium text-[var(--ink-950)]">Summary</p>
-                  <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{selectedStudy.latestRun.understanding.summary}</p>
-                </div>
-                <div className="grid gap-4 xl:grid-cols-2">
-                  <StudyListCard title="Feature definition" items={selectedStudy.latestRun.understanding.featureDefinition} />
-                  <StudyListCard title="User value" items={selectedStudy.latestRun.understanding.userValue} />
-                  <StudyListCard title="Workflows" items={selectedStudy.latestRun.understanding.workflows} />
-                  <StudyListCard title="Workflow narrative" items={selectedStudy.latestRun.understanding.workflowNarrative} />
-                  <StudyListCard title="Existing behavior" items={selectedStudy.latestRun.understanding.existingBehavior} />
-                  <StudyListCard title="Relevant paths" items={selectedStudy.latestRun.understanding.relevantPaths} />
-                  <StudyListCard title="Core touchpoints" items={selectedStudy.latestRun.understanding.coreTouchpoints} />
-                  <StudyListCard title="Important data" items={selectedStudy.latestRun.understanding.importantData} />
-                  <StudyListCard title="AI involvement" items={selectedStudy.latestRun.understanding.aiInvolvement} />
-                  <StudyListCard title="Dependencies" items={selectedStudy.latestRun.understanding.dependencies} />
-                </div>
-                <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                  <form action={`/api/projects/${project.id}/features/${feature.id}/study/guidance`} method="post" className="space-y-3">
-                    <input type="hidden" name="runId" value={selectedStudy.latestRun.id} />
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="font-medium text-[var(--ink-950)]">{roleLabel(selectedStudy.role)} evidence</p>
+                    <StatusBadge label={selectedStudy.latestRun?.status ?? "Not studied"} tone={selectedStudy.latestRun?.status === "Complete" ? "success" : selectedStudy.latestRun?.status === "Failed" ? "danger" : selectedStudy.latestRun ? "info" : "neutral"} />
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">
+                    {selectedStudy.latestRun?.understanding?.summary ?? `No ${roleLabel(selectedStudy.role)} feature study has been recorded yet.`}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <StatusBadge label={selectedStudy.latestRun ? `Latest v${selectedStudy.latestRun.version}` : "No runs yet"} tone="info" />
+                    <StatusBadge label={`${selectedStudy.recentRuns.length} recent run${selectedStudy.recentRuns.length === 1 ? "" : "s"}`} tone="neutral" />
+                  </div>
+                  <form action={`/api/projects/${project.id}/features/${feature.id}/study`} method="post" className="mt-5 space-y-3">
                     <input type="hidden" name="repositoryRole" value={selectedStudy.role} />
-                    <FieldShell label="Saved guidance" hint="Use this to steer the next pass once you have read the current study output.">
-                      <textarea name="guidance" rows={5} className="field-textarea" placeholder={`Add ${roleLabel(selectedStudy.role)} guidance for the next pass.`} />
+                    <FieldShell label={`Guidance for ${roleLabel(selectedStudy.role)}`} hint="Optional. Use this to steer the next study pass.">
+                      <textarea
+                        name="guidance"
+                        rows={4}
+                        className="field-textarea"
+                        placeholder={selectedStudy.role === "Source"
+                          ? "Optional Repo 1 guidance. Narrow the next pass to a workflow, subsystem, or implementation assumption."
+                          : "Optional Repo 2 guidance. Point to analogs, gaps, or likely landing zones for the feature."}
+                      />
                     </FieldShell>
-                    <div className="flex justify-end">
-                      <button type="submit" className="control-button-primary w-full sm:w-auto">Save guidance</button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                      <button type="submit" className="control-button-primary w-full sm:w-auto">Study {roleLabel(selectedStudy.role)}</button>
+                      {selectedStudy.latestRun?.status === "Complete" ? (
+                        <button type="submit" name="continueFromRunId" value={selectedStudy.latestRun.id} className="control-button-secondary w-full sm:w-auto">Continue study</button>
+                      ) : null}
                     </div>
                   </form>
-                  <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
-                    <p className="font-medium text-[var(--ink-950)]">Recent runs</p>
-                    <div className="mt-3 space-y-3">
-                      {selectedStudy.recentRuns.length > 0 ? selectedStudy.recentRuns.map((run) => (
-                        <article key={run.id} className="surface-item p-4">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <p className="font-medium text-[var(--ink-950)]">v{run.version}</p>
-                            <StatusBadge label={run.status} tone={run.status === "Complete" ? "success" : run.status === "Failed" ? "danger" : "info"} />
-                          </div>
-                          <p className="mt-2 text-sm leading-6 text-[var(--ink-700)]">{formatTimestamp(run.completedAt ?? run.startedAt ?? run.createdAt)}</p>
-                        </article>
-                      )) : <p>No prior runs yet.</p>}
-                    </div>
-                  </div>
                 </div>
-              </>
-            ) : selectedStudy.latestRun?.understandingError ? <div className="callout-danger">{selectedStudy.latestRun.understandingError}</div> : <div className="callout-info">No study output recorded yet.</div>}
+
+                <div className="surface-item p-4 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="font-medium text-[var(--ink-950)]">Current mapping</p>
+                    <StatusBadge label={mapping ? mapping.status : "Not mapped"} tone={mapping ? "success" : "neutral"} />
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">
+                    {mapping?.summary ?? "No mapping summary exists yet. Complete both feature studies, then refresh mapping."}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <StatusBadge label={hasBothStudies ? "Both studies complete" : "Both studies required"} tone={hasBothStudies ? "success" : "warning"} />
+                  </div>
+                  <form action={`/api/projects/${project.id}/features/${feature.id}/mapping`} method="post" className="mt-5">
+                    <button type="submit" className="control-button-secondary w-full sm:w-auto" disabled={!hasBothStudies}>Refresh mapping</button>
+                  </form>
+                </div>
+              </div>
+            </details>
           </div>
         </SectionCard>
       ) : null}
 
-      {activeStep === 3 ? (
-        <SectionCard eyebrow="Step 3" title="Source-target comparison">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="max-w-3xl">
-              <p>Use this mapping to understand what already exists in Repo 2, what only partially exists, and what remains missing for this feature.</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <StatusBadge label={mapping ? mapping.status : "Not mapped"} tone={mapping ? "success" : "neutral"} />
-                <StatusBadge label={hasBothStudies ? "Both studies complete" : "Both studies required"} tone={hasBothStudies ? "success" : "warning"} />
-              </div>
-            </div>
-            <form action={`/api/projects/${project.id}/features/${feature.id}/mapping`} method="post">
-              <button type="submit" className="control-button-secondary w-full sm:w-auto" disabled={!hasBothStudies}>Refresh mapping</button>
-            </form>
-          </div>
-
-          {mapping ? (
-            <div className="mt-4 space-y-4">
-              <div className="surface-item p-4 sm:p-5">
-                <p className="font-medium text-[var(--ink-950)]">Summary</p>
-                <p className="mt-3 text-sm leading-7 text-[var(--ink-700)]">{mapping.summary}</p>
-              </div>
-              <div className="grid gap-4 xl:grid-cols-2">
-                <StudyListCard title="Source behavior" items={mapping.sourceBehavior} />
-                <StudyListCard title="Already in Repo 2" items={mapping.existingInTarget} />
-                <StudyListCard title="Partially in Repo 2" items={mapping.partialInTarget} />
-                <StudyListCard title="Missing in Repo 2" items={mapping.missingInTarget} />
-                <StudyListCard title="Governing patterns" items={mapping.governingPatterns} />
-                <StudyListCard title="Recommended next steps" items={mapping.recommendedNextSteps} />
-              </div>
-            </div>
-          ) : (
-            <div className="callout-info mt-4">Complete Repo 1 and Repo 2 feature studies, then refresh mapping.</div>
-          )}
-        </SectionCard>
-      ) : null}
-
-      {activeStep === 4 ? (
-        <SectionCard eyebrow="Step 4" title="Implementation proposal">
+      {activeStep === 5 ? (
+        <SectionCard eyebrow="Step 5" title="Implementation proposal">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="max-w-3xl">
               <p>Use grounded feature intelligence, mapping, and approved doctrine to define what should be built in Repo 2 before any execution starts.</p>
@@ -809,7 +827,7 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
             <div className="mt-4 space-y-4">
               <form action={`/api/projects/${project.id}/features/${feature.id}/proposal/update`} method="post" className="space-y-4">
                 <input type="hidden" name="proposalId" value={latestProposal.id} />
-                <details className="surface-item p-4 sm:p-5" open>
+                <details className="surface-item p-4 sm:p-5">
                   <summary className="cursor-pointer list-none font-medium text-[var(--ink-950)]">Current proposal sections</summary>
                   <div className="mt-4 space-y-4">
                     <FieldShell label="Proposal summary" htmlFor="proposalSummary">
@@ -859,13 +877,13 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
         </SectionCard>
       ) : null}
 
-      {activeStep === 5 ? (
+      {activeStep === 6 || activeStep === 7 ? (
         <div className="space-y-4">
           {showProposalReviewWorkspace ? (
             <>
               <form action={`/api/projects/${project.id}/features/${feature.id}/proposal/update`} method="post" className="space-y-4">
                 <input type="hidden" name="proposalId" value={latestProposal.id} />
-                <SectionCard eyebrow="Step 5" title="Review notes and co-design">
+                <SectionCard eyebrow={activeStep === 6 ? "Step 6" : "Step 7"} title={activeStep === 6 ? "Proposal questions" : "Proposal agreement"}>
                   <div className="space-y-4">
                     <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
                       <p className="font-medium text-[var(--ink-950)]">Answer the questions that matter for the next draft</p>
@@ -994,21 +1012,26 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
                   <p className="font-medium text-[var(--ink-950)]">Approve proposal</p>
                   <p className="text-sm leading-6 text-[var(--ink-700)]">Approving this marks the proposal as the accepted implementation direction for later execution. It does not start coding.</p>
                   <div className="flex justify-end">
-                    <button type="submit" className="control-button-secondary w-full sm:w-auto" disabled={latestProposal.status === "Approved"}>Approve proposal</button>
+                    <button type="submit" className={activeStep === 7 ? "control-button-primary w-full sm:w-auto" : "control-button-secondary w-full sm:w-auto"} disabled={latestProposal.status === "Approved"}>Approve proposal</button>
                   </div>
                 </form>
               </div>
             </>
           ) : (
-            <SectionCard eyebrow="Step 5" title="Review notes and co-design">
+            <SectionCard eyebrow={activeStep === 6 ? "Step 6" : "Step 7"} title={activeStep === 6 ? "Proposal questions" : "Proposal agreement"}>
               <div className="callout-info">Generate a proposal first so review notes and execution can be controlled against an explicit boundary.</div>
             </SectionCard>
           )}
 
+        </div>
+      ) : null}
+
+      {activeStep === 8 || activeStep === 9 || activeStep === 10 ? (
+        <div className="space-y-4">
           {showApprovedExecutionSummary ? (
             <SectionCard
-              eyebrow="Step 5"
-              title={latestExecutionRun?.status === "Aborted" ? "Execution restart" : latestExecutionRun ? "Execution workspace" : "Execution prep"}
+              eyebrow={activeStep === 9 ? "Step 9" : activeStep === 10 ? "Step 10" : "Step 8"}
+              title={canStartExecution ? "Ready to code" : latestExecutionRun?.status === "Aborted" ? "Execution restart" : latestExecutionRun ? "Execution workspace" : "Execution prep"}
             >
               <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr_0.9fr]">
                 <div className="surface-item p-4 sm:p-5">
@@ -1034,7 +1057,7 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
                   <p className="font-medium text-[var(--ink-950)]">What this page is for</p>
                   <p className="mt-3 text-sm leading-6 text-[var(--ink-700)]">
                     {canStartExecution
-                      ? "Start a fresh execution run from the approved proposal."
+                      ? "This feature is approved and ready to enter controlled coding."
                       : executionNeedsOperatorInput
                         ? "Review the investigated decision packets below and answer only the operator decisions that remain open."
                         : latestExecutionRun?.status === "AwaitingReview"
@@ -1049,7 +1072,7 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
           ) : null}
 
           {latestProposal?.status === "Approved" && executionWorkspaceActive ? (
-            <SectionCard eyebrow="Step 5" title="Operator handoff">
+            <SectionCard eyebrow={activeStep === 9 ? "Step 9" : "Step 8"} title={activeStep === 9 ? "Deep execution questions" : "Operator handoff"}>
               <div className="space-y-4">
                 <div className="surface-item-compact p-4 text-sm leading-7 text-[var(--ink-700)]">
                   <p className="font-medium text-[var(--ink-950)]">Execution has moved past proposal review</p>
@@ -1091,7 +1114,7 @@ export default async function FeatureDetailPage({ params, searchParams }: Featur
           ) : null}
 
           {latestProposal?.status === "Approved" ? (
-            <SectionCard eyebrow="Execution" title="Controlled build run">
+            <SectionCard eyebrow={activeStep === 9 ? "Step 9" : activeStep === 10 ? "Step 10" : "Step 8"} title={activeStep === 10 ? "Review complete" : activeStep === 9 ? "Deep / philosophical execution questions" : "Execution"}>
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="max-w-3xl">
                   <p>Execution follows the approved proposal only. It should implement in small, traceable batches, pause when unclear, and stop at human review.</p>

@@ -29,69 +29,51 @@ export function AppShell({
   const projectBase = project ? `/projects/${project.id}` : null;
   const openApprovals = project?.approvals.filter((approval) => approval.status === "Open") ?? [];
   const activeTasks = project?.tasks.filter((task) => task.status === "Executing") ?? [];
-  const readyTasks = project?.tasks.filter((task) => task.status === "Ready to Merge") ?? [];
-  const navGroups = projectBase
+  const navLinks = projectBase
     ? [
-        {
-          label: "Workspace",
-          links: [
-            { href: projectBase, label: "Home" },
-            { href: `${projectBase}/understanding`, label: "Understanding" },
-            { href: `${projectBase}/features`, label: "Features" },
-            { href: "/settings", label: "Settings" },
-          ],
-        },
+        { href: projectBase, label: "Home" },
+        { href: `${projectBase}/understanding`, label: "System Knowledge" },
+        { href: `${projectBase}/features`, label: "Features" },
+        { href: "/settings", label: "Settings" },
       ]
     : [
-        {
-          label: "Core",
-          links: [
-            { href: "/projects", label: "Projects" },
-            { href: "/settings", label: "Settings" },
-          ],
-        },
+        { href: "/projects", label: "Home" },
+        { href: "/settings", label: "Settings" },
       ];
 
   const sidebar = (
     <>
       <div className="rounded-[1.15rem] border border-white/10 bg-white/6 p-4">
         <p className="section-label text-white/65">ProjectMapper</p>
-        <h1 className="mt-2 text-lg font-semibold tracking-tight text-white sm:text-xl">Migration control</h1>
+        <h1 className="mt-2 text-lg font-semibold tracking-tight text-white sm:text-xl">Guided migration machine</h1>
         <p className="mt-2 text-sm leading-6 text-white/72">
-          Internal operator workspace for repo study, doctrine, and migration control.
+          One current stage, one active work item, one next action.
         </p>
       </div>
 
-      <nav className="mt-5 space-y-5">
-        {navGroups.map((group) => (
-          <div key={group.label}>
-            <p className="section-label text-white/45">{group.label}</p>
-            <div className="mt-2.5 space-y-1.5">
-              {group.links.map((link) => {
-                const active = projectBase
-                  ? link.href === projectBase || link.href === "/settings"
-                    ? isActive(pathname, link.href, true)
-                    : isActive(pathname, link.href)
-                  : isActive(pathname, link.href, true);
+      <nav className="mt-5 space-y-1.5">
+        {navLinks.map((link) => {
+          const active = projectBase
+            ? link.href === projectBase || link.href === "/settings"
+              ? isActive(pathname, link.href, true)
+              : isActive(pathname, link.href)
+            : isActive(pathname, link.href, true);
 
-                return (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    onClick={() => setMobileNavOpen(false)}
-                    className={`block rounded-2xl border px-3.5 py-3 text-sm font-medium leading-none transition ${
-                      active
-                        ? "border-white/70 bg-white text-[var(--ink-950)] shadow-[0_8px_24px_rgba(255,255,255,0.14)]"
-                        : "border-transparent bg-transparent text-white/82 hover:border-white/12 hover:bg-white/8 hover:text-white"
-                    }`}
-                  >
-                    <span className={active ? "text-[var(--ink-950)]" : "text-inherit"}>{link.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+          return (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMobileNavOpen(false)}
+              className={`block rounded-2xl border px-3.5 py-3 text-sm font-medium leading-none transition ${
+                active
+                  ? "border-white/70 bg-white text-[var(--ink-950)] shadow-[0_8px_24px_rgba(255,255,255,0.14)]"
+                  : "border-transparent bg-transparent text-white/82 hover:border-white/12 hover:bg-white/8 hover:text-white"
+              }`}
+            >
+              <span className={active ? "text-[var(--ink-950)]" : "text-inherit"}>{link.label}</span>
+            </Link>
+          );
+        })}
       </nav>
 
       <div className="mt-5 space-y-3 rounded-[1.15rem] border border-white/10 bg-white/6 p-4 text-sm text-white/78">
@@ -104,7 +86,7 @@ export function AppShell({
           <StatusBadge label={`${activeTasks.length} task${activeTasks.length === 1 ? "" : "s"}`} tone="warning" />
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span>Pending</span>
+          <span>Open</span>
           <StatusBadge label={`${openApprovals.length} approval${openApprovals.length === 1 ? "" : "s"}`} tone="warning" />
         </div>
         <form action="/api/auth/logout" method="post" className="pt-2">
@@ -176,7 +158,6 @@ export function AppShell({
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge label={project?.status ?? "No active project"} tone="info" />
                   <StatusBadge label={`${openApprovals.length} pending`} tone="warning" />
-                  <StatusBadge label={`${readyTasks.length} ready`} tone="success" />
                   <StatusBadge label={`${activeTasks.length} active`} tone={toneFromState("Executing")} />
                 </div>
               </div>
